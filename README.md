@@ -153,7 +153,7 @@ Three pieces of info per printer:
 
 ```bash
 openssl s_client -connect <PRINTER_IP>:322 -showcerts </dev/null 2>&1 | grep "subject="
-# outputs:  subject=CN = 0938AC580200648
+# outputs:  subject=CN = XXXXXXXXXXXXXXX
 ```
 
 The `CN` value is the serial.

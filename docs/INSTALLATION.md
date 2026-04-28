@@ -52,9 +52,9 @@ done
 Expected output:
 ```
 === 192.168.x.A ===
-subject=CN = 0938AC580200648
+subject=CN = XXXXXXXXXXXXXXX
 === 192.168.x.B ===
-subject=CN = 00M09D522401457
+subject=CN = YYYYYYYYYYYYYYY
 ```
 
 Save these — you'll need them for `printers.yaml`.

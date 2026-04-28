@@ -1,6 +1,6 @@
 # Multi-Printer Setup
 
-Adding a second (or third, fourth, ...) printer touches three config files. Below is a worked example adding a printer named "Huey" to a single-Gort setup.
+Adding a second (or third, fourth, ...) printer touches three config files. Below is a worked example adding a printer named "Huey" to a single-printer setup that already has "Gort" working.
 
 ## 1. `printers.yaml` — add to the list
 
@@ -9,32 +9,32 @@ site_label: HOMELAB
 
 printers:
   - name:   Gort
-    host:   192.168.5.170
+    host:   192.168.1.50
     user:   bblp
-    pass:   ba5fa6b4
-    serial: 0938AC580200648
+    pass:   YOUR_GORT_ACCESS_CODE
+    serial: YOUR_GORT_SERIAL
 
-  - name:   Huey                     # ⬅ NEW
-    host:   192.168.5.126
+  - name:   Huey                          # NEW
+    host:   192.168.1.51
     user:   bblp
-    pass:   4a5e485f
-    serial: 00M09D4C2800639
+    pass:   YOUR_HUEY_ACCESS_CODE
+    serial: YOUR_HUEY_SERIAL
 ```
 
 ## 2. `go2rtc.yaml` — add the source, public stream, and drawtext template
 
 ```yaml
 streams:
-  gort_src: rtspx://bblp:ba5fa6b4@192.168.5.170:322/streaming/live/1
-  huey_src: rtspx://bblp:4a5e485f@192.168.5.126:322/streaming/live/1   # ⬅ NEW
+  gort_src: rtspx://bblp:YOUR_GORT_ACCESS_CODE@192.168.1.50:322/streaming/live/1
+  huey_src: rtspx://bblp:YOUR_HUEY_ACCESS_CODE@192.168.1.51:322/streaming/live/1   # NEW
 
   gort: ffmpeg:gort_src#video=drawtext=gort
-  huey: ffmpeg:huey_src#video=drawtext=huey                            # ⬅ NEW
+  huey: ffmpeg:huey_src#video=drawtext=huey                                          # NEW
 
 ffmpeg:
   drawtext=gort: -c:v libx264 -profile:v baseline -level:v 4.0 -preset:v veryfast -pix_fmt:v yuv420p -g:v 30 -keyint_min:v 30 -sc_threshold:v 0 -b:v 4M -maxrate:v 5M -bufsize:v 10M -vf "drawtext=textfile=/data/overlay/gort_1.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=8:x=20:y=h-100,drawtext=textfile=/data/overlay/gort_2.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=8:x=20:y=h-65,drawtext=textfile=/data/overlay/gort_3.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=8:x=20:y=h-30"
 
-  # ⬇ NEW - identical to drawtext=gort but with "huey" everywhere
+  # NEW - identical to drawtext=gort but with "huey" everywhere
   drawtext=huey: -c:v libx264 -profile:v baseline -level:v 4.0 -preset:v veryfast -pix_fmt:v yuv420p -g:v 30 -keyint_min:v 30 -sc_threshold:v 0 -b:v 4M -maxrate:v 5M -bufsize:v 10M -vf "drawtext=textfile=/data/overlay/huey_1.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=8:x=20:y=h-100,drawtext=textfile=/data/overlay/huey_2.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=8:x=20:y=h-65,drawtext=textfile=/data/overlay/huey_3.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=8:x=20:y=h-30"
 ```
 
@@ -42,13 +42,13 @@ ffmpeg:
 
 ```yaml
 onvif:
-  - mac: 1A:11:B0:5B:B3:5D
+  - mac: 02:00:00:00:00:01                  # YOUR existing Gort MAC
     ports:
       server: 11087
       rtsp: 11057
       snapshot: 11088
     name: Gort
-    uuid: f8299aa3-086c-4936-96d5-2f96756fa7e4
+    uuid: 00000000-0000-0000-0000-000000000001    # YOUR existing Gort UUID
     highQuality:
       rtsp: /gort
       snapshot: /api/frame.jpeg?src=gort
@@ -58,21 +58,21 @@ onvif:
       bitrate: 4096
       quality: 4
     target:
-      hostname: 192.168.5.66
+      hostname: 192.168.1.10
       ports:
         rtsp: 8554
         snapshot: 1984
 
-  # ⬇ NEW - Huey
-  - mac: 1A:11:B0:B9:59:91          # different from Gort, locally administered
+  # NEW - Huey
+  - mac: 02:00:00:00:00:02                  # different from Gort, locally administered
     ports:
-      server: 11083                  # different port range
+      server: 11083                          # different port range from Gort
       rtsp: 11055
       snapshot: 11084
     name: Huey
-    uuid: 03b84033-e669-4aca-a709-90bf4d20b7b0   # fresh UUID
+    uuid: 00000000-0000-0000-0000-000000000002    # FRESH uuid - generate with uuidgen
     highQuality:
-      rtsp: /huey                    # matches go2rtc stream name
+      rtsp: /huey                            # matches go2rtc stream name
       snapshot: /api/frame.jpeg?src=huey
       width: 1680
       height: 1080
@@ -80,7 +80,7 @@ onvif:
       bitrate: 4096
       quality: 4
     target:
-      hostname: 192.168.5.66         # same Docker host
+      hostname: 192.168.1.10                 # same Docker host as Gort
       ports:
         rtsp: 8554
         snapshot: 1984
@@ -97,9 +97,9 @@ Wait ~30 seconds, then in UniFi Protect → Devices, the new camera should appea
 
 ## Tips
 
-- **MAC addresses** must each be unique AND locally administered. Locally administered means the second nibble of the first byte must be `2`, `6`, `A`, or `E`. So `1A:11:...`, `02:42:...`, `0A:00:...`, `06:F1:...` all valid; `00:11:22:...` (vendor-assigned) is not.
+- **MAC addresses** must each be unique AND locally administered. Locally administered means the second nibble of the first byte must be `2`, `6`, `A`, or `E`. So `02:42:...`, `06:F1:...`, `0A:00:...`, `1A:11:...` are all valid; `00:11:22:...` (vendor-assigned) is not.
 - **Generate UUIDs** with `uuidgen` (Linux/macOS) or `[guid]::NewGuid()` in PowerShell, or any online UUID v4 generator.
-- **Port ranges** — keep each printer in its own clean range. The example uses 110xx for Gort, 110xx-1 for Huey. Avoid conflicts with anything else on your host.
+- **Port ranges** — keep each printer in its own clean range. Avoid conflicts with anything else on your host.
 - **Stream names** are case-sensitive and must be lowercase. The Python service writes files using lowercase names; the ONVIF wrapper and ffmpeg refer to the same names.
 
 ## Performance

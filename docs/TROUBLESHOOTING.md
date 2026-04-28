@@ -6,7 +6,7 @@ Common issues and fixes, in roughly the order they appeared during my own setup.
 
 **Symptom:** `bambu-onvif` container exits immediately with:
 ```
-Error: listen EADDRINUSE: address already in use 192.168.5.x:8081
+Error: listen EADDRINUSE: address already in use 192.168.1.10:8081
 ```
 
 **Cause:** Another service on your host (DSM, Sonarr, anything) already owns the port.

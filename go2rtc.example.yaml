@@ -12,7 +12,7 @@
 streams:
   # Raw upstream pulls (private; only consumed by ffmpeg below).
   # Format: rtspx://bblp:<ACCESS_CODE>@<PRINTER_IP>:322/streaming/live/1
-  gort_src: rtspx://bblp:YOUR_ACCESS_CODE@192.168.5.170:322/streaming/live/1
+  gort_src: rtspx://bblp:YOUR_ACCESS_CODE@192.168.1.170:322/streaming/live/1
 
   # Public streams: re-encoded with three stacked drawtext filters (one per overlay line).
   # The "drawtext=NAME" suffix references a custom template defined below.
