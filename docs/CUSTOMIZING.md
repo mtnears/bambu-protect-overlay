@@ -1,0 +1,94 @@
+# Customizing the Overlay
+
+## What you can change without touching code
+
+These are all in `go2rtc.yaml`'s `drawtext=<name>:` filter strings.
+
+| What | Where | Notes |
+|---|---|---|
+| **Position** | `x=20:y=h-N` | `x=20` = 20px from left, `y=h-30` = 30px from bottom. To anchor top-left: `x=20:y=20`. To anchor top-right: `x=w-tw-20:y=20`. |
+| **Font size** | `fontsize=22` | Larger numbers = larger text. 22px is readable on 1080p video and in mobile Protect tiles. |
+| **Text color** | `fontcolor=white` | Any X11 color name or `0xRRGGBB`. Try `lime`, `yellow`, or `0x00FFCC`. |
+| **Background** | `box=1:boxcolor=black@0.55:boxborderw=8` | Set `box=0` to remove the background entirely. Adjust `@0.55` (alpha 0–1) for transparency. `boxborderw` is the padding inside the box. |
+| **Font face** | `fontfile=/usr/share/fonts/droid/DroidSansMono.ttf` | Pre-installed in the go2rtc image. Use `docker exec go2rtc find / -name "*.ttf"` to see what else is available. |
+
+After editing `go2rtc.yaml`, restart go2rtc only:
+
+```bash
+docker compose restart go2rtc
+```
+
+No re-adoption in Protect needed — the camera-level params (resolution, framerate, codec) didn't change.
+
+## Changing what data is shown
+
+Edit `bambu-overlay/bambu_overlay.py`. Look for the `render_lines()` function (around line 270). It returns a tuple of `(line1, line2, line3)`.
+
+For example, to add fan speed to line 2, you'd:
+
+1. Add the field extraction in `update_state()`:
+   ```python
+   if "cooling_fan_speed" in print_data: s["fan"] = print_data["cooling_fan_speed"]
+   ```
+
+2. Add a formatter:
+   ```python
+   def fmt_fan(speed) -> str:
+       n = _to_int(speed)
+       return f"{n*10}%" if n is not None else "-"
+   ```
+
+3. Include it in line 2:
+   ```python
+   line2 = (
+       f"Layer {layer}   {eta_part}   "
+       f"Nozzle {nozzle}   Bed {bed}   Fan {fmt_fan(s.get('fan'))}   "
+       f"{filament}   Humidity: {humidity}"
+   )
+   ```
+
+After editing the Python source, you must rebuild:
+
+```bash
+docker compose up -d --build --force-recreate bambu-overlay
+```
+
+To find what other fields are available, capture an MQTT message and inspect:
+
+```bash
+docker exec bambu-overlay python3 -c "
+import paho.mqtt.client as mqtt, ssl, json, sys
+def on_message(c,u,m):
+    print(json.dumps(json.loads(m.payload), indent=2)); sys.exit(0)
+c = mqtt.Client(client_id='probe', callback_api_version=mqtt.CallbackAPIVersion.VERSION2)
+c.username_pw_set('bblp', '<ACCESS_CODE>')
+ctx = ssl.create_default_context(); ctx.check_hostname=False; ctx.verify_mode=ssl.CERT_NONE
+c.tls_set_context(ctx)
+c.on_message = on_message
+c.connect('<PRINTER_IP>', 8883)
+c.subscribe('device/<SERIAL>/report')
+c.loop_forever()
+"
+```
+
+The `print:` object is where most useful fields live.
+
+## Adding more overlay lines
+
+The current code writes three text files per printer (`<name>_1.txt`, `_2.txt`, `_3.txt`) and `go2rtc.yaml` chains three drawtext filters per stream. To add a fourth line:
+
+1. In `bambu_overlay.py`, change `render_lines()` to return four strings, and update `write_overlay_files()` to iterate over `(1, 2, 3, 4)` accordingly.
+
+2. In `go2rtc.yaml`, add a fourth `drawtext=...` to each printer's chain, with a different `y=` value (e.g. `y=h-135` to stack above the existing three).
+
+3. Rebuild bambu-overlay and restart go2rtc.
+
+## Hardware acceleration
+
+The example uses software H.264 encoding (`-c:v libx264`). On hosts with Intel QuickSync, you can switch to `-c:v h264_qsv` for ~5x throughput improvement. AMD VAAPI users can try `-c:v h264_vaapi` (more setup required). Encoder availability varies by ffmpeg build — verify with:
+
+```bash
+docker exec go2rtc ffmpeg -encoders 2>/dev/null | grep h264
+```
+
+If hardware encoders are listed, you can swap in their flags. Note that the additional `-init_hw_device` and `-vaapi_device` arguments may also be needed for VAAPI.

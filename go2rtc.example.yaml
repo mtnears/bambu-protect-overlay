@@ -1,0 +1,38 @@
+# ----------------------------------------------------------------------------
+# go2rtc - Bambu RTSPS pull + ffmpeg overlay re-encode
+# ----------------------------------------------------------------------------
+# Replace IPs and access codes with your printer's values.
+# Add additional printers by duplicating both the source and the public-stream
+# entries, and adding a matching drawtext template at the bottom.
+#
+# Bambu printers use self-signed TLS certs - the rtspx:// scheme tells go2rtc
+# to skip verification.
+# ----------------------------------------------------------------------------
+
+streams:
+  # Raw upstream pulls (private; only consumed by ffmpeg below).
+  # Format: rtspx://bblp:<ACCESS_CODE>@<PRINTER_IP>:322/streaming/live/1
+  gort_src: rtspx://bblp:YOUR_ACCESS_CODE@192.168.5.170:322/streaming/live/1
+
+  # Public streams: re-encoded with three stacked drawtext filters (one per overlay line).
+  # The "drawtext=NAME" suffix references a custom template defined below.
+  gort: ffmpeg:gort_src#video=drawtext=gort
+
+ffmpeg:
+  # Per-printer drawtext templates.
+  #
+  # Three drawtext filters are chained with commas, one per overlay line,
+  # positioned bottom-up:
+  #   line 3 (job):     y = h-30   (bottom)
+  #   line 2 (metrics): y = h-65
+  #   line 1 (header):  y = h-100  (top of the overlay strip)
+  #
+  # The bambu-overlay container writes the three text files (gort_1.txt,
+  # gort_2.txt, gort_3.txt) every second.
+  #
+  # expansion=none keeps drawtext from interpreting % as strftime escapes.
+  #
+  # Encoder settings (-c:v libx264 ... -bufsize 10M) are tuned for
+  # broad compatibility with UniFi Protect's H.264 decoder.
+
+  drawtext=gort: -c:v libx264 -profile:v baseline -level:v 4.0 -preset:v veryfast -pix_fmt:v yuv420p -g:v 30 -keyint_min:v 30 -sc_threshold:v 0 -b:v 4M -maxrate:v 5M -bufsize:v 10M -vf "drawtext=textfile=/data/overlay/gort_1.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=8:x=20:y=h-100,drawtext=textfile=/data/overlay/gort_2.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=8:x=20:y=h-65,drawtext=textfile=/data/overlay/gort_3.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=8:x=20:y=h-30"
