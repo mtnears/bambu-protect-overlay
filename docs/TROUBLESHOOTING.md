@@ -2,6 +2,48 @@
 
 Common issues and fixes, in roughly the order they appeared during my own setup.
 
+
+## Failed to find IP address for MAC address (Linux/Debian/OMV)
+
+**Symptom:** `bambu-onvif` container logs repeat:
+
+    Failed to find IP address for MAC address a2:a2:a2:a2:a2:a1
+
+**Cause:** On Linux hosts the macvlan interface does not exist by default. The onvif-server looks for the MAC from `config.yaml` on the host network and cannot find it.
+
+**Fix:** Create the macvlan interface manually:
+
+    sudo ip link add onvif0 link eth0 type macvlan mode bridge
+    sudo ip link set onvif0 address <your-mac-from-config.yaml>
+    sudo ip addr add <chosen-ip>/24 dev onvif0
+    sudo ip link set onvif0 up
+    sudo docker restart bambu-onvif
+
+Replace eth0 with your actual interface, the MAC with the one from config.yaml, and choose an IP outside your DHCP range.
+
+To make this persistent across reboots see the Linux/Debian section in INSTALLATION.md.
+
+
+## Failed to find IP address for MAC address (Linux/Debian/OMV)
+
+**Symptom:** `bambu-onvif` container logs repeat:
+
+    Failed to find IP address for MAC address a2:a2:a2:a2:a2:a1
+
+**Cause:** On Linux hosts the macvlan interface does not exist by default. The onvif-server looks for the MAC from `config.yaml` on the host network and cannot find it.
+
+**Fix:** Create the macvlan interface manually:
+
+    sudo ip link add onvif0 link eth0 type macvlan mode bridge
+    sudo ip link set onvif0 address <your-mac-from-config.yaml>
+    sudo ip addr add <chosen-ip>/24 dev onvif0
+    sudo ip link set onvif0 up
+    sudo docker restart bambu-onvif
+
+Replace eth0 with your actual interface, the MAC with the one from config.yaml, and choose an IP outside your DHCP range.
+
+To make this persistent across reboots see the Linux/Debian section in INSTALLATION.md.
+
 ## Port conflicts on startup
 
 **Symptom:** `bambu-onvif` container exits immediately with:
