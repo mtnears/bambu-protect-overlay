@@ -17,6 +17,31 @@ sudo -i
 docker compose version
 ```
 
+### On Debian / Ubuntu / OMV
+
+1. Install Docker if not already present:
+
+    curl -fsSL https://get.docker.com | sh
+    sudo usermod -aG docker $USER
+
+2. Confirm Docker Compose v2:
+
+    docker compose version
+
+3. **Create the macvlan interface** -- required for the ONVIF server to broadcast its virtual IP. Without this the bambu-onvif container fails with "Failed to find IP address for MAC address".
+
+    sudo ip link add onvif0 link eth0 type macvlan mode bridge
+    sudo ip link set onvif0 address <your-mac-from-config.yaml>
+    sudo ip addr add <chosen-ip>/24 dev onvif0
+    sudo ip link set onvif0 up
+
+    Replace eth0 with your actual interface (ip link show to list), use the MAC from config.yaml, pick an IP outside your DHCP range.
+
+4. **Make the interface persistent** across reboots -- see the systemd service example in the issue: https://github.com/mtnears/bambu-protect-overlay/issues/1
+
+> Note: On OMV, uuidgen may not be installed. Use: cat /proc/sys/kernel/random/uuid
+
+
 ## 2. Enable LAN Mode Liveview on each printer
 
 This is what exposes RTSPS (port 322) and MQTT (port 8883) on the printer's LAN interface.
