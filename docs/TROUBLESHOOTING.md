@@ -19,6 +19,14 @@ sudo ss -tlnH | awk '{print $4}' | awk -F: '{print $NF}' | sort -n -u
 
 Pick numbers not in that list.
 
+## Wrapper logs "Failed to find IP address for MAC address"
+
+**Symptom:** `bambu-onvif` container starts but immediately logs errors mentioning the MAC addresses you defined in `config.yaml`, and the wrapper never serves any cameras.
+
+**Cause:** The `rtsp-to-onvif` wrapper expects each printer's MAC to be bound to a real network interface. On Synology, DSM auto-creates these macvlan interfaces. On other Linux hosts (vanilla Debian, Ubuntu, Proxmox, OMV, Unraid, etc.), you have to create them manually.
+
+**Fix:** Follow [LINUX_NETWORKING.md](LINUX_NETWORKING.md) for step-by-step macvlan setup with systemd persistence.
+
 ## Printer `connect failed` in `bambu-overlay` logs
 
 **Symptom:** Log shows:

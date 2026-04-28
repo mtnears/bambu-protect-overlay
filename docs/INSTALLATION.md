@@ -17,6 +17,13 @@ sudo -i
 docker compose version
 ```
 
+> **⚠️ Non-Synology Linux hosts** (Debian, Ubuntu, Proxmox, OMV, Unraid, etc.):
+> The ONVIF wrapper needs each printer's virtual MAC to live on its own
+> macvlan network interface. Synology DSM auto-creates these; other distros
+> don't. Before completing this install, follow [LINUX_NETWORKING.md](LINUX_NETWORKING.md)
+> to manually create the macvlan interfaces — otherwise the wrapper container
+> will fail with `Failed to find IP address for MAC address`.
+
 ## 2. Enable LAN Mode Liveview on each printer
 
 This is what exposes RTSPS (port 322) and MQTT (port 8883) on the printer's LAN interface.

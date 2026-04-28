@@ -210,6 +210,7 @@ If you get a black screen on adoption, see [docs/TROUBLESHOOTING.md](docs/TROUBL
 ## 📚 Documentation
 
 - **[Installation Guide](docs/INSTALLATION.md)** — step-by-step setup on Synology, including DSM-specific gotchas
+- **[Linux Networking (non-Synology)](docs/LINUX_NETWORKING.md)** — manual macvlan setup for Debian/Ubuntu/Proxmox/OMV/Unraid hosts
 - **[Multi-Printer Setup](docs/MULTI_PRINTER.md)** — adding more than one printer with worked examples
 - **[Customizing the Overlay](docs/CUSTOMIZING.md)** — change colors, position, font size, fields shown
 - **[Troubleshooting](docs/TROUBLESHOOTING.md)** — common issues and fixes
@@ -227,6 +228,7 @@ Quick triage:
 | Camera adopted but black screen in Protect | Try toggling Stream Compatibility Mode in Protect settings, then re-adopt |
 | Live view fine but stream can't be played in VLC | RTSP transport — VLC defaults to UDP; use TCP |
 | Wrapper container immediately exits | Virtual MAC conflict with an existing interface, or invalid UUID format |
+| Wrapper logs `Failed to find IP address for MAC` | Macvlan interface not created. See [LINUX_NETWORKING.md](docs/LINUX_NETWORKING.md) (non-Synology hosts) |
 
 Detailed walkthroughs in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
