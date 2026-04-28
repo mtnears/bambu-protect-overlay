@@ -1,0 +1,37 @@
+# ----------------------------------------------------------------------------
+# Bambu Protect Overlay - Printer Configuration
+# ----------------------------------------------------------------------------
+# Copy this file to printers.yaml and fill in your printer details.
+# printers.yaml is gitignored to keep credentials out of version control.
+#
+# Each printer needs:
+#   name    - friendly display name shown in the overlay (e.g. "Gort")
+#   host    - printer's local IP address
+#   user    - always "bblp" for Bambu printers
+#   pass    - the printer's Access Code (Settings -> WLAN -> Access Code)
+#   serial  - the printer's Device Serial Number
+#             You can find this from the TLS certificate:
+#               openssl s_client -connect <printer-ip>:322 -showcerts \
+#                 </dev/null 2>&1 | grep "subject="
+#             The serial is the CN value (e.g. "XXXXXXXXXXXXXXX")
+# ----------------------------------------------------------------------------
+
+# Optional: shown at the start of overlay line 1 (your home/site label)
+site_label: BAMBU
+
+# Optional: target character width for overlay line 1 padding (default 70)
+line_width: 70
+
+printers:
+  - name:   Gort
+    host:   192.168.1.170
+    user:   bblp
+    pass:   YOUR_ACCESS_CODE_HERE
+    serial: YOUR_SERIAL_NUMBER_HERE
+
+  # Add more printers as needed:
+  # - name:   Dewey
+  #   host:   192.168.1.125
+  #   user:   bblp
+  #   pass:   YOUR_ACCESS_CODE_HERE
+  #   serial: YOUR_SERIAL_NUMBER_HERE

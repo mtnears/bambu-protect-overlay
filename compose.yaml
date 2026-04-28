@@ -1,0 +1,50 @@
+# ----------------------------------------------------------------------------
+# Bambu Protect Overlay - Docker Compose
+# ----------------------------------------------------------------------------
+# Three services:
+#   go2rtc           - pulls RTSPS streams from Bambu printers, transcodes with overlay
+#   rtsp-to-onvif    - wraps go2rtc streams as ONVIF cameras for UniFi Protect adoption
+#   bambu-overlay    - subscribes to printer MQTT and writes overlay text every second
+#
+# Before deploying:
+#   1. Copy printers.example.yaml -> printers.yaml and configure your printers.
+#   2. Edit go2rtc.yaml with your printers' RTSPS URLs and overlay settings.
+#   3. Edit config.yaml with your virtual ONVIF endpoints.
+#   4. Set TZ below to your timezone.
+# ----------------------------------------------------------------------------
+
+services:
+  go2rtc:
+    image: alexxit/go2rtc
+    container_name: go2rtc
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ./go2rtc.yaml:/config/go2rtc.yaml
+      - overlay-data:/data/overlay:ro
+
+  rtsp-to-onvif:
+    image: ghcr.io/daniela-hase/onvif-server:latest
+    container_name: bambu-onvif
+    network_mode: host
+    restart: unless-stopped
+    cap_add:
+      - NET_ADMIN
+    privileged: true
+    volumes:
+      - ./config.yaml:/onvif.yaml
+
+  bambu-overlay:
+    build: ./bambu-overlay
+    container_name: bambu-overlay
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      # Set this to your local timezone for accurate clock & finish-time display
+      - TZ=America/Los_Angeles
+    volumes:
+      - ./printers.yaml:/config/printers.yaml:ro
+      - overlay-data:/data/overlay
+
+volumes:
+  overlay-data:

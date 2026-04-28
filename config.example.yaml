@@ -1,0 +1,54 @@
+# ----------------------------------------------------------------------------
+# rtsp-to-onvif (daniela-hase/onvif-server) - virtual ONVIF cameras
+# ----------------------------------------------------------------------------
+# Each printer becomes a virtual ONVIF camera with its own MAC address and
+# port range. UniFi Protect discovers and adopts these as third-party cameras.
+#
+# Important values to set per printer:
+#   mac          - Locally-administered MAC. Each printer needs a UNIQUE one.
+#                  Must start with 02, 06, 0A, 0E, 12, 16, 1A, 1E, 22, ...
+#                  (any value where the second nibble is 2, 6, A, or E).
+#                  YOU MUST CHANGE THIS - do not use the example value as-is.
+#   ports.server - ONVIF service port. Pick any free port on your host.
+#   ports.rtsp   - RTSP proxy port for this camera. Pick any free port.
+#   ports.snapshot - HTTP snapshot proxy port. Pick any free port.
+#   uuid         - Generate a fresh UUID for each printer (uuidgen on Linux,
+#                  or any online UUID generator).
+#                  YOU MUST CHANGE THIS - do not use the example value as-is.
+#   target.hostname - Your Docker host's IP on the LAN (NOT 127.0.0.1).
+#                     This is the address Protect will pull RTSP from.
+#
+# Pick port numbers that are well clear of common services. The 11000-11100
+# range is generally safe, but always verify with:
+#   sudo ss -tlnH | awk '{print $4}' | awk -F: '{print $NF}' | sort -n -u
+# ----------------------------------------------------------------------------
+
+onvif:
+  # ----- EXAMPLE PRINTER ENTRY - replace ALL values below with your own -----
+  - mac: 02:00:00:00:00:01                          # CHANGE - locally-administered, unique per printer
+    ports:
+      server: 11087                                 # CHANGE if conflicting with anything on your host
+      rtsp: 11057                                   # CHANGE if conflicting
+      snapshot: 11088                               # CHANGE if conflicting
+    name: Gort                                      # matches your printer name in printers.yaml
+    uuid: 00000000-0000-0000-0000-000000000001      # CHANGE - generate with `uuidgen`
+    highQuality:
+      rtsp: /gort                                   # path under target hostname (matches go2rtc stream name)
+      snapshot: /api/frame.jpeg?src=gort            # go2rtc's snapshot endpoint
+      width: 1680
+      height: 1080
+      framerate: 30
+      bitrate: 4096
+      quality: 4
+    target:
+      hostname: 192.168.1.10                        # CHANGE to your Docker host's LAN IP
+      ports:
+        rtsp: 8554                                  # go2rtc default RTSP port
+        snapshot: 1984                              # go2rtc default API/snapshot port
+
+  # Add more printers by duplicating the block above and changing:
+  # - mac (unique locally-administered MAC per printer)
+  # - ports.{server,rtsp,snapshot} (unique per printer)
+  # - name and uuid
+  # - highQuality.rtsp path (matches the stream name in go2rtc.yaml)
+  # - highQuality.snapshot src= parameter (also matches stream name)

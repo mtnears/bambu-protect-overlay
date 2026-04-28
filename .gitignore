@@ -1,0 +1,31 @@
+# Configuration files containing secrets - users create these from the .example versions
+printers.yaml
+go2rtc.yaml
+config.yaml
+
+# Allow the example templates
+!printers.example.yaml
+!go2rtc.example.yaml
+!config.example.yaml
+
+# Compose override (some users add a compose.override.yaml for local tweaks)
+compose.override.yaml
+docker-compose.override.yaml
+
+# Build artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+.venv/
+venv/
+
+# Editor/OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+@eaDir/
