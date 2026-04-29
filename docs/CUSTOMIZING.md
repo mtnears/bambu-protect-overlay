@@ -73,6 +73,44 @@ c.loop_forever()
 
 The `print:` object is where most useful fields live.
 
+## Performance Tuning
+
+Software H.264 encoding with the drawtext overlay is the most CPU-intensive part of this stack. The defaults (30fps, `veryfast` preset, 4 Mbps) prioritize quality and motion smoothness, which works fine for 1-2 printers on most hardware. With more printers or weaker hardware, you may want to dial back.
+
+The relevant flags in each `drawtext=NAME` template in `go2rtc.yaml`:
+
+| Flag | Default | Lower-CPU option | Effect |
+|---|---|---|---|
+| `-r` | `30` | `15` or `10` | Output framerate. Halving roughly halves encode CPU. 10fps is plenty for a print bed; 15fps is a good middle ground. |
+| `-preset:v` | `veryfast` | `ultrafast` | x264 speed preset. `ultrafast` is roughly 2x faster than `veryfast` with a slight quality trade-off. |
+| `-b:v` / `-maxrate:v` / `-bufsize:v` | `4M / 5M / 10M` | `2M / 3M / 6M` | Bitrate cap. Lower means less encode work AND lower bandwidth. 2 Mbps is plenty for printer cam + readable overlay. |
+| `-g:v` / `-keyint_min:v` | `30 / 30` | match your `-r` value | Keyframe interval. Should equal your `-r` (one keyframe per second). |
+
+### Reference numbers
+
+From a Synology DS1621+ (Ryzen V1500B, 4c/8t, software encoding) running **four** simultaneous 1080p streams with overlay:
+
+| Profile | Settings | CPU usage |
+|---|---|---|
+| Quality (defaults) | 30fps / veryfast / 4 Mbps | ~415% (52% of host) |
+| Balanced | 15fps / veryfast / 3 Mbps | ~280% (35% of host) |
+| Lightweight | 10fps / ultrafast / 2 Mbps | ~210% (26% of host) |
+
+Single-printer setups will be ~25% of the above. CPU usage is roughly linear with printer count.
+
+### When to tune
+
+- **1-2 printers, modern CPU** — leave the defaults alone.
+- **3+ printers, mid-range CPU** — try the balanced profile (15fps) first.
+- **4+ printers OR ARM/Atom CPU** — use the lightweight profile.
+
+After changing settings, restart go2rtc only (no Protect re-adoption needed):
+
+```bash
+docker compose restart go2rtc
+docker stats --no-stream go2rtc
+```
+
 ## Adding more overlay lines
 
 The current code writes three text files per printer (`<name>_1.txt`, `_2.txt`, `_3.txt`) and `go2rtc.yaml` chains three drawtext filters per stream. To add a fourth line:

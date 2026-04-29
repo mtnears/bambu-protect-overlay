@@ -96,7 +96,7 @@ It's also just nice to have all your cameras in one place.
 - **OpenSSL** on the host (only used once during setup to read printer serial numbers from TLS certs)
 
 ### Performance notes
-Re-encoding 4× 1080p30 software-encoded streams uses about **25–35% total CPU** on a Ryzen V1500B. Lower-end NAS CPUs may struggle with multiple printers — start with one and watch resource usage before adding more.
+Re-encoding 4× 1080p software-encoded streams uses about **25–50% total CPU** on a Ryzen V1500B, depending on whether you keep the default 30fps profile or tune to a lighter 10–15fps profile. Lower-end NAS CPUs may struggle with multiple printers — start with one, then see [docs/CUSTOMIZING.md → Performance Tuning](docs/CUSTOMIZING.md#performance-tuning) before scaling up.
 
 ---
 
@@ -236,13 +236,19 @@ Detailed walkthroughs in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
 ## 📊 Resource Usage
 
-On a Synology DS1621+ (Ryzen V1500B, 4c/8t, no hardware video encode) running **four** simultaneous 1080p30 streams with overlay:
+On a Synology DS1621+ (Ryzen V1500B, 4c/8t, no hardware video encode) running **four** simultaneous 1080p streams with overlay:
 
-- **CPU**: 25–35% total (about one full core)
-- **RAM**: under 200 MB across all three containers
-- **Disk**: minimal — overlay text files are a few KB; recording space is up to UniFi Protect
+| Profile | Settings | Total CPU |
+|---|---|---|
+| Quality (default) | 30fps / veryfast / 4 Mbps | ~52% (~4 cores) |
+| Balanced | 15fps / veryfast / 3 Mbps | ~35% (~3 cores) |
+| Lightweight | 10fps / ultrafast / 2 Mbps | ~26% (~2 cores) |
 
-For a single printer the CPU cost is negligible (under 10%).
+Memory: under 200 MB across all three containers. Disk: minimal (overlay text files are a few KB; recording space is determined by UniFi Protect).
+
+For a single printer, CPU cost is roughly 1/4 of the above.
+
+See [docs/CUSTOMIZING.md → Performance Tuning](docs/CUSTOMIZING.md#performance-tuning) for the exact flags to switch profiles.
 
 ---
 
