@@ -38,21 +38,29 @@ streams:
   # Format: rtspx://bblp:<ACCESS_CODE>@<PRINTER_IP>:322/streaming/live/1
   gort_src: rtspx://bblp:YOUR_ACCESS_CODE@192.168.1.170:322/streaming/live/1
 
-  # Public streams: re-encoded with three stacked drawtext filters (one per overlay line).
+  # Public streams: re-encoded with overlay (drawbox background + 4 drawtext layers).
   # The "drawtext=NAME" suffix references a custom template defined below.
   gort: ffmpeg:gort_src#video=drawtext=gort
 
 ffmpeg:
   # Per-printer drawtext templates.
   #
-  # Three drawtext filters are chained with commas, one per overlay line,
-  # positioned bottom-up:
-  #   line 3 (job):     y = h-30   (bottom)
-  #   line 2 (metrics): y = h-65
-  #   line 1 (header):  y = h-100  (top of the overlay strip)
+  # Each pipeline does:
+  #   1. drawbox - paint a single semi-transparent black rectangle across the
+  #      bottom of the frame. ALL text sits on top of this bar, so the
+  #      background is consistent regardless of line length.
+  #   2. Four drawtext filters chained, one per overlay line. NO per-text
+  #      box (box=0) since drawbox handles the background.
   #
-  # The bambu-overlay container writes the three text files (gort_1.txt,
-  # gort_2.txt, gort_3.txt) every second.
+  # Layout (1080p source, 26px font):
+  #   bar covers y=h-180 to y=h (180 pixels tall, comfortable padding)
+  #   line 1 (header):    y = h-165
+  #   line 2 (progress):  y = h-128
+  #   line 3 (filament):  y = h-91
+  #   line 4 (job):       y = h-50
+  #
+  # The bambu-overlay container writes the four text files (gort_1.txt
+  # through gort_4.txt) every second.
   #
   # expansion=none keeps drawtext from interpreting % as strftime escapes.
   #
@@ -60,4 +68,4 @@ ffmpeg:
   # H.264 decoder. See the comment block at top of this file for tuning
   # options if you need to reduce CPU load.
 
-  drawtext=gort: -c:v libx264 -profile:v baseline -level:v 4.0 -preset:v veryfast -pix_fmt:v yuv420p -r 30 -g:v 30 -keyint_min:v 30 -sc_threshold:v 0 -b:v 4M -maxrate:v 5M -bufsize:v 10M -vf "drawtext=textfile=/data/overlay/gort_1.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=8:x=20:y=h-100,drawtext=textfile=/data/overlay/gort_2.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=8:x=20:y=h-65,drawtext=textfile=/data/overlay/gort_3.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=22:fontcolor=white:box=1:boxcolor=black@0.55:boxborderw=8:x=20:y=h-30"
+  drawtext=gort: -c:v libx264 -profile:v baseline -level:v 4.0 -preset:v veryfast -pix_fmt:v yuv420p -r 30 -g:v 30 -keyint_min:v 30 -sc_threshold:v 0 -b:v 4M -maxrate:v 5M -bufsize:v 10M -vf "drawbox=x=0:y=ih-180:w=iw:h=180:color=black@0.55:t=fill,drawtext=textfile=/data/overlay/gort_1.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=26:fontcolor=white:x=20:y=h-165,drawtext=textfile=/data/overlay/gort_2.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=26:fontcolor=white:x=20:y=h-128,drawtext=textfile=/data/overlay/gort_3.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=26:fontcolor=white:x=20:y=h-91,drawtext=textfile=/data/overlay/gort_4.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=26:fontcolor=white:x=20:y=h-50"

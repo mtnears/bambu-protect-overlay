@@ -9,10 +9,11 @@ both UniFi Protect's live view and recordings.
 
 Configuration is read from /config/printers.yaml.
 
-For each printer, three files are written (one per overlay line):
+For each printer, four files are written (one per overlay line):
   /data/overlay/{name}_1.txt   <- header line (site, name, status, time)
-  /data/overlay/{name}_2.txt   <- metrics line (layer, eta, temps, etc.)
-  /data/overlay/{name}_3.txt   <- job name line
+  /data/overlay/{name}_2.txt   <- progress + temps line
+  /data/overlay/{name}_3.txt   <- filament + speed + stage line
+  /data/overlay/{name}_4.txt   <- job name line
 
 Each line is rendered by a separate drawtext filter at a different y
 position, which avoids newline/escape complexity in ffmpeg.
@@ -45,7 +46,7 @@ WRITE_INTERVAL = 1.0  # seconds
 # Defaults if not set in printers.yaml
 DEFAULTS = {
     "site_label": "BAMBU",
-    "line_width": 70,
+    "line_width": 80,
 }
 
 
@@ -109,7 +110,7 @@ def load_config() -> dict:
 state_lock = threading.Lock()
 state: dict[str, dict] = {}
 SITE_LABEL = ""
-LINE_WIDTH = 70
+LINE_WIDTH = 80
 
 
 # ---------------------------------------------------------------------------
@@ -210,6 +211,91 @@ def fmt_layer(layer, total, percent) -> str:
     return f"{l}/{t}{pct}"
 
 
+# Bambu's print speed-level enum (set on the printer or via slicer).
+# spd_mag is a numeric multiplier - 100 = Standard, 166 = Ludicrous, etc.
+SPEED_LEVELS = {
+    1: "Silent",
+    2: "Standard",
+    3: "Sport",
+    4: "Ludicrous",
+}
+
+
+def fmt_speed(level, magnitude) -> str:
+    n = _to_int(level)
+    label = SPEED_LEVELS.get(n) if n is not None else None
+    mag = _to_int(magnitude)
+    if label and mag is not None:
+        return f"{label} ({mag}%)"
+    if label:
+        return label
+    if mag is not None:
+        return f"{mag}%"
+    return "-"
+
+
+def fmt_chamber(temp) -> str:
+    """Chamber temperature in Celsius. Returns '-' for printers that don't
+    expose chamber temp (X1C, P1S, A1, A1 Mini)."""
+    n = _to_int(temp)
+    if n is None:
+        return "-"
+    return f"{n}"
+
+
+# Print stage codes - Bambu's internal enum for the various phases of
+# a print job. List built up from various community-documented values
+# plus observation in real captures.
+STAGE_CODES = {
+    -1: "Idle",
+    0:  "Printing",
+    1:  "Auto Bed Leveling",
+    2:  "Heatbed Preheating",
+    3:  "Sweeping XY",
+    4:  "Changing Filament",
+    5:  "M400 Pause",
+    6:  "Filament Runout",
+    7:  "Heating Hotend",
+    8:  "Calibrating Extrusion",
+    9:  "Scanning Bed Surface",
+    10: "Inspecting First Layer",
+    11: "Identifying Build Plate",
+    12: "Calibrating Lidar",
+    13: "Homing Toolhead",
+    14: "Cleaning Nozzle",
+    15: "Checking Hotend Temp",
+    16: "Paused (User)",
+    17: "Paused (Cover)",
+    18: "Calibrating Lidar",
+    19: "Calibrating Flow",
+    20: "Paused (Hotend Temp)",
+    21: "Paused (Bed Temp)",
+    22: "Unloading Filament",
+    23: "Skip-Step Pause",
+    24: "Loading Filament",
+    25: "Calibrating Motor Noise",
+    26: "Paused (AMS Lost)",
+    27: "Paused (Heatbreak Fan)",
+    28: "Paused (Chamber Temp)",
+    29: "Cooling Chamber",
+    30: "Paused (Gcode)",
+    31: "Motor Noise Showoff",
+    32: "Paused (Nozzle Cover)",
+    33: "Paused (Cutter Error)",
+    34: "Paused (First Layer)",
+    35: "Paused (Nozzle Clog)",
+    74: "Heating Bed",
+    255: "-",
+}
+
+
+def fmt_stage(stg_cur) -> str:
+    n = _to_int(stg_cur)
+    if n is None:
+        return "-"
+    return STAGE_CODES.get(n, f"Stage {n}")
+
+
 # ---------------------------------------------------------------------------
 # State extraction
 # ---------------------------------------------------------------------------
@@ -234,6 +320,26 @@ def update_state(name: str, payload: dict) -> None:
         if "nozzle_target_temper" in print_data: s["nozzle_target"] = print_data["nozzle_target_temper"]
         if "bed_temper"           in print_data: s["bed"]           = print_data["bed_temper"]
         if "bed_target_temper"    in print_data: s["bed_target"]    = print_data["bed_target_temper"]
+
+        # Chamber temperature (H2-series and newer; falls back to None on older models)
+        # Two equivalent paths in the schema - try both.
+        chamber = None
+        ctc = print_data.get("device", {}).get("ctc", {}).get("info", {})
+        if isinstance(ctc, dict) and "temp" in ctc:
+            chamber = ctc["temp"]
+        else:
+            info_obj = print_data.get("info")
+            if isinstance(info_obj, dict) and "temp" in info_obj:
+                chamber = info_obj["temp"]
+        if chamber is not None:
+            s["chamber"] = chamber
+
+        # Print speed setting (Silent/Standard/Sport/Ludicrous + numeric multiplier)
+        if "spd_lvl" in print_data: s["spd_lvl"] = print_data["spd_lvl"]
+        if "spd_mag" in print_data: s["spd_mag"] = print_data["spd_mag"]
+
+        # Print stage (current activity within a print job - see STAGE_CODES)
+        if "stg_cur" in print_data: s["stg_cur"] = print_data["stg_cur"]
 
         # AMS: humidity + active filament
         # Schema: print.ams.ams[N].{humidity, tray[]}
@@ -271,8 +377,8 @@ def update_state(name: str, payload: dict) -> None:
 # Overlay rendering
 # ---------------------------------------------------------------------------
 
-def render_lines(name: str, s: dict) -> tuple[str, str, str]:
-    """Render the 3 overlay lines for a printer. Returns (line1, line2, line3)."""
+def render_lines(name: str, s: dict) -> tuple[str, str, str, str]:
+    """Render the 4 overlay lines for a printer. Returns (line1, line2, line3, line4)."""
     now    = datetime.now()
     clock  = now.strftime("%H:%M:%S")
     date   = now.strftime("%b %d %Y")
@@ -283,29 +389,41 @@ def render_lines(name: str, s: dict) -> tuple[str, str, str]:
     finish   = fmt_finish_time(s.get("remaining"), now)
     nozzle   = fmt_temp_compact(s.get("nozzle"), s.get("nozzle_target"))
     bed      = fmt_temp_compact(s.get("bed"),    s.get("bed_target"))
+    chamber  = fmt_chamber(s.get("chamber"))
     filament = s.get("filament") or "-"
     humidity = fmt_humidity(s.get("humidity"))
+    speed    = fmt_speed(s.get("spd_lvl"), s.get("spd_mag"))
+    stage    = fmt_stage(s.get("stg_cur"))
     job      = s.get("subtask_name") or "-"
 
     eta_part = f"ETA {eta}" + (f" (done {finish})" if finish else "")
 
+    # Line 1: site, name, status (left)  +  date and clock (right)
     left  = f"{SITE_LABEL}: {name.upper()}   {status}"
     right = f"{date} {clock}"
     pad   = max(LINE_WIDTH - len(left) - len(right), 2)
     line1 = left + (" " * pad) + right
 
+    # Line 2: print progress + temps (chamber added)
     line2 = (
         f"Layer {layer}   {eta_part}   "
-        f"Nozzle {nozzle}   Bed {bed}   "
-        f"{filament}   Humidity: {humidity}"
+        f"Nozzle {nozzle}   Bed {bed}   Chamber {chamber}"
     )
-    line3 = f"Job: {job}"
 
-    return line1.rstrip(), line2.rstrip(), line3.rstrip()
+    # Line 3: filament + humidity + speed + stage
+    line3 = (
+        f"{filament}   Humidity: {humidity}   "
+        f"Speed: {speed}   Stage: {stage}"
+    )
+
+    # Line 4: job name
+    line4 = f"Job: {job}"
+
+    return line1.rstrip(), line2.rstrip(), line3.rstrip(), line4.rstrip()
 
 
 def write_overlay_files(name: str) -> None:
-    """Write three files per printer, one per overlay line, atomically."""
+    """Write four files per printer, one per overlay line, atomically."""
     with state_lock:
         lines = render_lines(name, state[name])
 

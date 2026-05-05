@@ -6,10 +6,10 @@ These are all in `go2rtc.yaml`'s `drawtext=<name>:` filter strings.
 
 | What | Where | Notes |
 |---|---|---|
-| **Position** | `x=20:y=h-N` | `x=20` = 20px from left, `y=h-30` = 30px from bottom. To anchor top-left: `x=20:y=20`. To anchor top-right: `x=w-tw-20:y=20`. |
-| **Font size** | `fontsize=22` | Larger numbers = larger text. 22px is readable on 1080p video and in mobile Protect tiles. |
+| **Position** | `x=20:y=h-N` | `x=20` = 20px from left, `y=h-50` = 50px from bottom. To anchor top-left: `x=20:y=20`. To anchor top-right: `x=w-tw-20:y=20`. |
+| **Font size** | `fontsize=26` | Larger numbers = larger text. 26px is readable on 1080p video and in mobile Protect tiles. |
 | **Text color** | `fontcolor=white` | Any X11 color name or `0xRRGGBB`. Try `lime`, `yellow`, or `0x00FFCC`. |
-| **Background** | `box=1:boxcolor=black@0.55:boxborderw=8` | Set `box=0` to remove the background entirely. Adjust `@0.55` (alpha 0–1) for transparency. `boxborderw` is the padding inside the box. |
+| **Background bar** | `drawbox=x=0:y=ih-180:w=iw:h=180:color=black@0.55:t=fill` | Single semi-transparent rectangle behind the text. `@0.55` is alpha (0=invisible, 1=solid). Adjust `h=180` to make the bar taller/shorter; if you change it, also adjust the `y=h-N` values for each `drawtext` to keep the lines inside the bar. |
 | **Font face** | `fontfile=/usr/share/fonts/droid/DroidSansMono.ttf` | Pre-installed in the go2rtc image. Use `docker exec go2rtc find / -name "*.ttf"` to see what else is available. |
 
 After editing `go2rtc.yaml`, restart go2rtc only:
@@ -113,11 +113,11 @@ docker stats --no-stream go2rtc
 
 ## Adding more overlay lines
 
-The current code writes three text files per printer (`<name>_1.txt`, `_2.txt`, `_3.txt`) and `go2rtc.yaml` chains three drawtext filters per stream. To add a fourth line:
+The current code writes four text files per printer (`<name>_1.txt`, `_2.txt`, `_3.txt`, `_4.txt`) and `go2rtc.yaml` chains four drawtext filters per stream. To add a fifth line:
 
-1. In `bambu_overlay.py`, change `render_lines()` to return four strings, and update `write_overlay_files()` to iterate over `(1, 2, 3, 4)` accordingly.
+1. In `bambu_overlay.py`, change `render_lines()` to return five strings, and update `write_overlay_files()` to iterate over `(1, 2, 3, 4, 5)` accordingly.
 
-2. In `go2rtc.yaml`, add a fourth `drawtext=...` to each printer's chain, with a different `y=` value (e.g. `y=h-135` to stack above the existing three).
+2. In `go2rtc.yaml`, add a fifth `drawtext=...` to each printer's chain, with a different `y=` value (e.g. `y=h-200` to stack above the existing four). Also bump the `drawbox` `h=180` to `h=220` and `y=ih-180` to `y=ih-220` so the background bar covers the new line.
 
 3. Rebuild bambu-overlay and restart go2rtc.
 

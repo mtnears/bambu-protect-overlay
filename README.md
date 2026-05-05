@@ -2,7 +2,7 @@
 
 **Bambu Lab printer cameras in UniFi Protect, with live MQTT data burned into the video.**
 
-Adopt your Bambu printer's camera into UniFi Protect as a third-party camera, and overlay live print data (layer count, ETA, temperatures, filament, AMS humidity, estimated finish time) directly onto the video stream. The overlay is burned into the pixels by ffmpeg, so it appears in both Protect's live view and recordings — perfect for diagnosing failed prints by scrubbing through the recording.
+Adopt your Bambu printer's camera into UniFi Protect as a third-party camera, and overlay live print data (layer count, ETA with finish time, hotend/bed/chamber temps, filament, AMS humidity, speed mode, current print stage, job name) directly onto the video stream. The overlay is burned into the pixels by ffmpeg, so it appears in both Protect's live view and recordings — perfect for diagnosing failed prints by scrubbing through the recording.
 
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Python 3.12](https://img.shields.io/badge/python-3.12-blue.svg)](https://www.python.org/downloads/)
@@ -13,12 +13,13 @@ Adopt your Bambu printer's camera into UniFi Protect as a third-party camera, an
 ## 🎬 Example overlay
 
 ```
-MTNEARZ.COM: GORT   Printing                      Apr 28 2026 13:09:09
-Layer 31/54 (46%)   ETA 2h 19m (done 15:28)   Nozzle 270/270   Bed 100/100   ASA   Humidity: 3/5 (Normal)
+MTNEARZ.COM: GORT   Printing                                Apr 28 2026 13:09:09
+Layer 31/54 (46%)   ETA 2h 19m (done 15:28)   Nozzle 270/270   Bed 100/100   Chamber 28
+ASA   Humidity: 3/5 (Normal)   Speed: Standard (100%)   Stage: Printing
 Job: Jig - Bottle Opener
 ```
 
-Three-line strip across the bottom of the frame, semi-transparent dark background, monospace font, updates every second.
+Four-line strip across the bottom of the frame on a single solid translucent bar, monospace font, updates every second. Chamber temperature shows for printers that expose it (H2-series and newer); falls back to `-` on older models.
 
 ---
 
@@ -26,7 +27,10 @@ Three-line strip across the bottom of the frame, semi-transparent dark backgroun
 
 - **🎥 Real-time camera in UniFi Protect** — adopt as a third-party ONVIF camera, with full live view and continuous recording on your NVR.
 - **📊 Live data overlay** — MQTT-driven, burned into pixels with `ffmpeg drawtext`. Visible in live view AND recordings.
-- **🕐 Estimated finish time** — calculates current time + remaining minutes so you can see at a glance when a print should be done.
+- **🕐 Estimated finish time** — calculates current time + remaining minutes so you can see at a glance when a print should be done. Updates automatically when speed mode changes.
+- **🌡️ Chamber temperature** — for H2-series and newer printers that expose it. Older models gracefully show `-`.
+- **🚥 Print stage display** — decodes Bambu's stage codes into human-readable phases: "Heating Bed", "Calibrating Flow", "Cleaning Nozzle", "Printing", etc.
+- **⚡ Speed mode** — shows current speed level (Silent / Standard / Sport / Ludicrous) and percentage multiplier.
 - **💧 Friendly humidity labels** — translates Bambu's 0–5 AMS scale into "Normal", "Damp", "Dry", etc.
 - **🏠 Multi-printer ready** — all four of my Bambu printers (Dewey/Huey/Louie/Gort) on one Synology NAS.
 - **🔧 Docker-only deployment** — three containers, one compose file, no host-side Python/ffmpeg installs.
@@ -70,7 +74,7 @@ Bambu printer ──MQTT:8883──► bambu-overlay (Python)
 
 Three Docker services running side-by-side on a single host:
 
-1. **`go2rtc`** pulls the encrypted RTSPS video stream from each printer and re-encodes it on the fly with ffmpeg, applying three stacked `drawtext` filters that render live data lines onto the bottom of the frame.
+1. **`go2rtc`** pulls the encrypted RTSPS video stream from each printer and re-encodes it on the fly with ffmpeg, applying a `drawbox` background plus four stacked `drawtext` filters that render live data lines onto the bottom of the frame.
 2. **`bambu-overlay`** subscribes to each printer's local MQTT broker and writes formatted text files (one per overlay line per printer) once per second. ffmpeg's `drawtext` reads these files on every frame.
 3. **`rtsp-to-onvif`** wraps each printer's processed stream as a virtual ONVIF camera with its own MAC address and IP, so UniFi Protect can discover and adopt them as third-party cameras.
 
