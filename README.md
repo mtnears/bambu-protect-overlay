@@ -178,6 +178,20 @@ The text shown at the start of overlay line 1, before the printer name. Defaults
 site_label: MYHOME.LOCAL
 ```
 
+### Optional: MakerWorld model titles (`printers.yaml`)
+
+Prints started from **MakerWorld or Bambu Handy** report the print *profile* as the task name, so the Job line would read `Job: 0.2mm layer, 2 walls, 25% infill`. Those prints also carry the MakerWorld `design_id`, so the overlay looks up the model's title through MakerWorld's public design API and shows:
+
+```
+Job: Dual Monitor Alignment Clip  (0.2mm layer, 2 walls, 25% infill)
+```
+
+The lookup runs in the background and is cached once per design. On any error it falls back to the task name. Prints sent from Bambu Studio don't carry a design ID and still show the project or plate name. To keep the overlay fully offline:
+
+```yaml
+makerworld_titles: false
+```
+
 ---
 
 ## 🖨️ Multiple Printers
