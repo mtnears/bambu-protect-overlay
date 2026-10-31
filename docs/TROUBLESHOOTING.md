@@ -188,3 +188,25 @@ Open an issue with:
 - Sanitized version of your config files (remove access codes and serials)
 - Bambu printer model and firmware version
 - UniFi Protect version and NVR hardware
+
+## Protect keeps offering a duplicate camera (Linux hosts)
+
+**Symptom:** the printer camera is adopted and working, but Protect shows "New camera found" again. The offer has the wrapper's IP (for example 192.168.1.50) and the **Docker host's** MAC, or the other way round. The UniFi client list may show the host's IP and the wrapper's IP with their MACs swapped.
+
+**Cause:** Linux "ARP flux". By default every interface answers ARP for every IP on the host, so the host's main NIC (`eno1`, `eth0`, ...) also answers "who has <wrapper IP>?" with its own MAC, competing with the wrapper's macvlan interface. Whichever reply lands last wins, and Protect sees the same camera under two MACs.
+
+**Fix:** have each interface answer only for its own address. Make it persistent:
+
+```bash
+sudo tee /etc/sysctl.d/90-arp-flux.conf >/dev/null <<'CONF'
+net.ipv4.conf.all.arp_ignore = 1
+net.ipv4.conf.all.arp_announce = 2
+net.ipv4.conf.default.arp_ignore = 1
+net.ipv4.conf.default.arp_announce = 2
+CONF
+sudo sysctl -p /etc/sysctl.d/90-arp-flux.conf
+```
+
+Then remove the stale camera in Protect, and adopt only the entry that has the wrapper's virtual MAC.
+
+**Related:** after this change, any other service on the host that advertises itself on *all* interfaces (Homebridge with Avahi, for example) may advertise the wrapper's IP and become unreachable from HomeKit. Restrict those services to the main NIC. For the Homebridge Docker image, mount an `avahi-daemon.conf` containing `allow-interfaces=eth0` (or your NIC name).

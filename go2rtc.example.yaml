@@ -68,4 +68,7 @@ ffmpeg:
   # H.264 decoder. See the comment block at top of this file for tuning
   # options if you need to reduce CPU load.
 
+  # NVIDIA GPU instead of CPU: replace "-c:v libx264 -profile:v baseline -level:v 4.0 -preset:v veryfast"
+  # with "-c:v h264_nvenc -profile:v baseline -level:v 4.0 -preset:v p4 -tune:v ll -bf:v 0 -rc:v vbr"
+  # and use the go2rtc hardware image (see docs/NVIDIA-NVENC.md).
   drawtext=gort: -c:v libx264 -profile:v baseline -level:v 4.0 -preset:v veryfast -pix_fmt:v yuv420p -r 30 -g:v 30 -keyint_min:v 30 -sc_threshold:v 0 -b:v 4M -maxrate:v 5M -bufsize:v 10M -vf "drawbox=x=0:y=ih-180:w=iw:h=180:color=black@0.55:t=fill,drawtext=textfile=/data/overlay/gort_1.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=26:fontcolor=white:x=20:y=h-165,drawtext=textfile=/data/overlay/gort_2.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=26:fontcolor=white:x=20:y=h-128,drawtext=textfile=/data/overlay/gort_3.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=26:fontcolor=white:x=20:y=h-91,drawtext=textfile=/data/overlay/gort_4.txt:reload=1:expansion=none:fontfile=/usr/share/fonts/droid/DroidSansMono.ttf:fontsize=26:fontcolor=white:x=20:y=h-50"
