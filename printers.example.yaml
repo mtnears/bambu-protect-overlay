@@ -22,6 +22,11 @@ site_label: BAMBU
 # Optional: target character width for overlay line 1 padding (default 70)
 line_width: 70
 
+# Look up the MakerWorld model title for prints started from MakerWorld/Handy
+# (they otherwise only report the print profile, e.g. "0.2mm layer, 2 walls").
+# Uses the public design API; set to false to keep the overlay fully offline.
+makerworld_titles: true
+
 printers:
   - name:   Gort
     host:   192.168.1.170

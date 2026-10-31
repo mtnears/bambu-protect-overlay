@@ -28,6 +28,7 @@ import ssl
 import sys
 import threading
 import time
+import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -47,6 +48,7 @@ WRITE_INTERVAL = 1.0  # seconds
 DEFAULTS = {
     "site_label": "BAMBU",
     "line_width": 80,
+    "makerworld_titles": True,
 }
 
 
@@ -99,6 +101,7 @@ def load_config() -> dict:
     return {
         "site_label": cfg.get("site_label", DEFAULTS["site_label"]),
         "line_width": int(cfg.get("line_width", DEFAULTS["line_width"])),
+        "makerworld_titles": bool(cfg.get("makerworld_titles", DEFAULTS["makerworld_titles"])),
         "printers":   printers,
     }
 
@@ -300,6 +303,59 @@ def fmt_stage(stg_cur) -> str:
 # State extraction
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# MakerWorld model title lookup
+# ---------------------------------------------------------------------------
+# Prints started from MakerWorld / Bambu Handy report the print *profile* as
+# subtask_name (e.g. "0.2mm layer, 2 walls, 25% infill") but also carry the
+# MakerWorld design_id. The public design API turns that into the model's
+# title. Lookups run in a background thread and are cached, so a slow or
+# unreachable MakerWorld never stalls the overlay. Set makerworld_titles: false
+# in printers.yaml to disable.
+
+MAKERWORLD_API = "https://makerworld.com/api/v1/design-service/design/{}"
+MAKERWORLD_TITLES = True
+_design_titles: dict = {}          # design_id -> title ("" = lookup failed)
+_design_lock = threading.Lock()
+
+
+def _fetch_design_title(design_id: str) -> None:
+    title = ""
+    try:
+        req = urllib.request.Request(MAKERWORLD_API.format(design_id),
+                                     headers={"User-Agent": "bambu-protect-overlay"})
+        with urllib.request.urlopen(req, timeout=10) as r:
+            title = str(json.load(r).get("title") or "").strip()
+    except Exception as e:  # network, HTTP or JSON errors: fall back to subtask_name
+        log.info("MakerWorld title lookup for design %s failed: %s", design_id, e)
+    with _design_lock:
+        _design_titles[design_id] = title
+    if title:
+        log.info("MakerWorld design %s: %s", design_id, title)
+
+
+def design_title(design_id) -> str | None:
+    """Cached MakerWorld title for design_id; starts a background lookup on first use."""
+    d = _to_str(design_id)
+    if not MAKERWORLD_TITLES or not d or d == "0":
+        return None
+    with _design_lock:
+        if d in _design_titles:
+            return _design_titles[d] or None
+        _design_titles[d] = ""      # placeholder so we only fetch once
+    threading.Thread(target=_fetch_design_title, args=(d,), daemon=True).start()
+    return None
+
+
+def fmt_job(subtask_name, design_id) -> str:
+    """Model title (from MakerWorld) plus the task/profile name, or just the task name."""
+    task = _to_str(subtask_name) or ""
+    title = design_title(design_id)
+    if title and task and task.lower() != title.lower():
+        return f"{title}  ({task})"
+    return title or task or "-"
+
+
 def update_state(name: str, payload: dict) -> None:
     """Merge a printer's MQTT report payload into our state dictionary."""
     print_data = payload.get("print", {})
@@ -311,6 +367,7 @@ def update_state(name: str, payload: dict) -> None:
 
         if "gcode_state"       in print_data: s["gcode_state"]    = print_data["gcode_state"]
         if "subtask_name"      in print_data: s["subtask_name"]   = print_data["subtask_name"]
+        if "design_id"         in print_data: s["design_id"]      = print_data["design_id"]
         if "mc_percent"        in print_data: s["percent"]        = print_data["mc_percent"]
         if "layer_num"         in print_data: s["layer_num"]      = print_data["layer_num"]
         if "total_layer_num"   in print_data: s["total_layer_num"] = print_data["total_layer_num"]
@@ -394,7 +451,7 @@ def render_lines(name: str, s: dict) -> tuple[str, str, str, str]:
     humidity = fmt_humidity(s.get("humidity"))
     speed    = fmt_speed(s.get("spd_lvl"), s.get("spd_mag"))
     stage    = fmt_stage(s.get("stg_cur"))
-    job      = s.get("subtask_name") or "-"
+    job      = fmt_job(s.get("subtask_name"), s.get("design_id"))
 
     eta_part = f"ETA {eta}" + (f" (done {finish})" if finish else "")
 
@@ -509,11 +566,12 @@ def writer_thread(printers: list) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    global SITE_LABEL, LINE_WIDTH, state
+    global SITE_LABEL, LINE_WIDTH, MAKERWORLD_TITLES, state
 
     cfg = load_config()
     SITE_LABEL = cfg["site_label"]
     LINE_WIDTH = cfg["line_width"]
+    MAKERWORLD_TITLES = cfg["makerworld_titles"]
     printers   = cfg["printers"]
 
     state = {p["name"]: {} for p in printers}
