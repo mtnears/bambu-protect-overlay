@@ -180,6 +180,16 @@ The text shown at the start of overlay line 1, before the printer name. Defaults
 site_label: MYHOME.LOCAL
 ```
 
+### Optional: display names (`printers.yaml`)
+
+By default line 1 shows each printer's `name` in capitals. Add `display` to show something else on the overlay while keeping `name` as the internal key for the overlay files, the go2rtc stream and the ONVIF config. Useful for names with spaces, or for a replacement printer that takes over an existing camera slot, so Protect keeps the same camera and its history:
+
+```yaml
+printers:
+  - name:    Huey          # stream "huey", overlay files huey_1.txt ... huey_4.txt
+    display: Huey.v2       # shown on the overlay as "HUEY.V2"
+```
+
 ### Optional: MakerWorld model titles (`printers.yaml`)
 
 Prints started from **MakerWorld or Bambu Handy** report the print *profile* as the task name, so the Job line would read `Job: 0.2mm layer, 2 walls, 25% infill`. Those prints also carry the MakerWorld `design_id`, so the overlay looks up the model's title through MakerWorld's public design API and shows:
@@ -188,7 +198,7 @@ Prints started from **MakerWorld or Bambu Handy** report the print *profile* as 
 Job: Dual Monitor Alignment Clip  (0.2mm layer, 2 walls, 25% infill)
 ```
 
-The lookup runs in the background and is cached once per design. On any error it falls back to the task name. Prints sent from Bambu Studio don't carry a design ID and still show the project or plate name. To keep the overlay fully offline:
+The lookup only happens when the printer reports a MakerWorld `design_id`. It runs in the background and the title is cached per design; a failed lookup falls back to the task name and is retried after 10 minutes. Emoji and other characters the overlay font can't draw are removed, and the Job line is shortened to `job_width` characters (default 100), dropping the profile name first. Prints sent from Bambu Studio don't carry a design ID and still show the project or plate name. To keep the overlay fully offline:
 
 ```yaml
 makerworld_titles: false
