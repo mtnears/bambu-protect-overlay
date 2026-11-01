@@ -51,6 +51,9 @@ DEFAULTS = {
     "line_width": 80,
     "job_width": 100,
     "makerworld_titles": True,
+    "overlay_style": "text",      # "text" (drawtext lines) or "hud" (graphical, see hud.py)
+    "logo": None,                 # HUD: path inside the container to a logo PNG
+    "video_size": "1920x1080",    # HUD: printer stream size; per-printer override allowed
 }
 
 
@@ -105,6 +108,9 @@ def load_config() -> dict:
         "line_width": int(cfg.get("line_width", DEFAULTS["line_width"])),
         "job_width":  int(cfg.get("job_width", DEFAULTS["job_width"])),
         "makerworld_titles": bool(cfg.get("makerworld_titles", DEFAULTS["makerworld_titles"])),
+        "overlay_style": str(cfg.get("overlay_style", DEFAULTS["overlay_style"])).lower(),
+        "logo": cfg.get("logo", DEFAULTS["logo"]),
+        "video_size": str(cfg.get("video_size", DEFAULTS["video_size"])),
         "printers":   printers,
     }
 
@@ -119,6 +125,14 @@ SITE_LABEL = ""
 LINE_WIDTH = 80
 JOB_WIDTH  = 100
 DISPLAY_NAMES: dict[str, str] = {}   # internal name -> name shown on line 1
+OVERLAY_STYLE = "text"
+LOGO_PATH: str | None = None
+VIDEO_SIZES: dict[str, tuple[int, int]] = {}   # internal name -> (w, h) for the HUD image
+
+
+def _parse_size(v: str) -> tuple[int, int]:
+    w, h = str(v).lower().split("x")
+    return int(w), int(h)
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +278,7 @@ STAGE_CODES = {
     2:  "Heatbed Preheating",
     3:  "Sweeping XY",
     4:  "Changing Filament",
-    5:  "M400 Pause",
+    5:  "Slicer Pause",
     6:  "Filament Runout",
     7:  "Heating Hotend",
     8:  "Calibrating Extrusion",
@@ -466,6 +480,9 @@ def update_state(name: str, payload: dict) -> None:
                             tt = tray.get("tray_type")
                             if tt:
                                 s["filament"] = tt
+                            tc = _to_str(tray.get("tray_color"))
+                            if tc and len(tc) >= 6:
+                                s["filament_color"] = tc[:6]
                             break
 
 
@@ -518,6 +535,57 @@ def render_lines(name: str, s: dict) -> tuple[str, str, str, str]:
     return line1.rstrip(), line2.rstrip(), line3.rstrip(), line4.rstrip()
 
 
+def build_view(name: str, s: dict) -> dict:
+    """Translate raw MQTT state into the plain dict hud.render() draws."""
+    task = _printable(_to_str(s.get("subtask_name")) or "")
+    title = _printable(design_title(s.get("design_id")) or "")
+    job, profile = (title, task if task.lower() != title.lower() else "") if title else (task, "")
+    color = None
+    fc = s.get("filament_color")
+    if fc:
+        try:
+            color = tuple(int(fc[i:i + 2], 16) for i in (0, 2, 4))
+        except ValueError:
+            color = None
+    hn = _to_int(s.get("humidity"))
+    lvl = _to_int(s.get("spd_lvl"))
+    return {
+        "display": DISPLAY_NAMES.get(name, name),
+        "status": fmt_status(s.get("gcode_state")),
+        "stage": fmt_stage(s.get("stg_cur")) if s.get("stg_cur") is not None else "",
+        "job": job or None,
+        "profile": profile or None,
+        "percent": _to_int(s.get("percent")) or 0,
+        "layer": _to_int(s.get("layer_num")) or 0,
+        "total_layers": _to_int(s.get("total_layer_num")) or 0,
+        "remaining": _to_int(s.get("remaining")),
+        "nozzle": _to_float(s.get("nozzle")), "nozzle_t": _to_float(s.get("nozzle_target")),
+        "bed": _to_float(s.get("bed")), "bed_t": _to_float(s.get("bed_target")),
+        "chamber": _to_float(s.get("chamber")), "chamber_t": None,
+        "filament": s.get("filament"), "filament_color": color,
+        "speed_mag": _to_int(s.get("spd_mag")),
+        "speed_level": SPEED_LEVELS.get(lvl, "") if lvl is not None else "",
+        "humidity_n": hn, "humidity_label": HUMIDITY_LABELS.get(hn, "") if hn is not None else "",
+        "pauses": [],
+        "logo": LOGO_PATH,
+        "site_label": SITE_LABEL,
+    }
+
+
+def write_hud_file(name: str) -> None:
+    """Render the graphical HUD and replace <name>_hud.png atomically."""
+    import hud   # imported lazily: Pillow is only needed for the HUD style
+    with state_lock:
+        view = build_view(name, dict(state[name]))
+    img = hud.render(view, VIDEO_SIZES.get(name, (1920, 1080)))
+    if view["status"] == "Paused":
+        hud.paused_banner(img, view["layer"], None)
+    path = OUTPUT_DIR / f"{name.lower()}_hud.png"
+    tmp = path.with_suffix(".tmp.png")
+    img.save(tmp, compress_level=1)
+    os.replace(tmp, path)
+
+
 def write_overlay_files(name: str) -> None:
     """Write four files per printer, one per overlay line, atomically."""
     with state_lock:
@@ -557,6 +625,10 @@ def make_client(printer: dict) -> mqtt.Client:
         if reason_code == 0:
             log.info("[%s] connected", name)
             c.subscribe(topic, qos=0)
+            # Ask for a full status report: printers otherwise send only changed
+            # fields, so the job name etc. would stay blank until the next change.
+            c.publish(f"device/{serial}/request",
+                      json.dumps({"pushing": {"sequence_id": "0", "command": "pushall"}}), qos=0)
         else:
             log.warning("[%s] connect failed: %s", name, reason_code)
 
@@ -595,6 +667,8 @@ def writer_thread(printers: list) -> None:
         for p in printers:
             try:
                 write_overlay_files(p["name"])
+                if OVERLAY_STYLE == "hud":
+                    write_hud_file(p["name"])
             except Exception as exc:
                 log.warning("[%s] write error: %s", p["name"], exc)
         time.sleep(WRITE_INTERVAL)
@@ -606,6 +680,7 @@ def writer_thread(printers: list) -> None:
 
 def main() -> None:
     global SITE_LABEL, LINE_WIDTH, JOB_WIDTH, MAKERWORLD_TITLES, DISPLAY_NAMES, state
+    global OVERLAY_STYLE, LOGO_PATH, VIDEO_SIZES
 
     cfg = load_config()
     SITE_LABEL = cfg["site_label"]
@@ -619,6 +694,11 @@ def main() -> None:
     # the key for overlay file names, go2rtc streams and ONVIF config, so a printer can
     # be renamed on screen (e.g. a replacement unit "Huey.v2") without re-adopting it.
     DISPLAY_NAMES = {p["name"]: str(p.get("display") or p["name"]) for p in printers}
+    OVERLAY_STYLE = cfg["overlay_style"]
+    LOGO_PATH = cfg["logo"]
+    VIDEO_SIZES = {p["name"]: _parse_size(p.get("video_size") or cfg["video_size"]) for p in printers}
+    if OVERLAY_STYLE == "hud":
+        log.info("overlay style: hud (writing <name>_hud.png; logo: %s)", LOGO_PATH or "none")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
