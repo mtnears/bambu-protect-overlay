@@ -438,7 +438,11 @@ def update_state(name: str, payload: dict) -> None:
         chamber = None
         ctc = print_data.get("device", {}).get("ctc", {}).get("info", {})
         if isinstance(ctc, dict) and "temp" in ctc:
-            chamber = ctc["temp"]
+            # H2-series packs target and current into one int: (target << 16) | current
+            raw = _to_int(ctc["temp"])
+            if raw is not None:
+                chamber = raw & 0xFFFF
+                s["chamber_target"] = raw >> 16
         else:
             info_obj = print_data.get("info")
             if isinstance(info_obj, dict) and "temp" in info_obj:
@@ -570,7 +574,7 @@ def build_view(name: str, s: dict) -> dict:
         "remaining": _to_int(s.get("remaining")),
         "nozzle": _to_float(s.get("nozzle")), "nozzle_t": _to_float(s.get("nozzle_target")),
         "bed": _to_float(s.get("bed")), "bed_t": _to_float(s.get("bed_target")),
-        "chamber": _to_float(s.get("chamber")), "chamber_t": None,
+        "chamber": _to_float(s.get("chamber")), "chamber_t": _to_float(s.get("chamber_target")),
         "filament": s.get("filament") or "None loaded", "filament_color": color,
         "speed_mag": _to_int(s.get("spd_mag")),
         "speed_level": SPEED_LEVELS.get(lvl, "") if lvl is not None else "",
