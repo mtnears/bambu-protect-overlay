@@ -338,7 +338,11 @@ def render(v: dict, size=(1680, 1080), now: datetime | None = None) -> Image.Ima
          "AMS DRYNESS", humidity_color(hn), segments=5)
     lg = logo(v.get("logo"), 150)
     if lg is not None:
-        img.alpha_composite(lg, (int(cx(7) - lg.width / 2 + 4), int(gy - 76)))
+        # fit inside the last gauge slot: at most 150 px tall and (slot - 12) px wide
+        box_w = slot - 12
+        if lg.width > box_w:
+            lg = lg.resize((box_w, max(1, round(lg.height * box_w / lg.width))), Image.LANCZOS)
+        img.alpha_composite(lg, (int(cx(7) - lg.width / 2 + 4), int(gy + 2 - lg.height / 2)))
     elif v.get("site_label"):
         d.text((cx(7), gy), fit_text(d, v["site_label"], font("Bold", 18), slot - 10),
                font=font("Bold", 18), fill=DIM, anchor="mm")
