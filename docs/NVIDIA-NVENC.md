@@ -72,3 +72,17 @@ Measured on a Dell R720 (2× Xeon E5-2690) with an NVIDIA T400, one H2S stream a
    Expect one encoder session per printer stream that someone is watching (or that Protect is recording).
 
 The GPU can be shared with Emby, Plex or Jellyfin; each overlay stream is a single NVENC session. To go back to software encoding, delete `compose.override.yaml` and revert the template line.
+
+## Graphical HUD on NVIDIA (`overlay_style: hud`)
+
+The HUD (see the README) can run fully on the GPU here too: decode with CUDA, composite the HUD image with `overlay_cuda`, and encode with NVENC. The camera frames arrive as NV12 in GPU memory. The HUD PNG is converted to `yuva420p` (to keep its alpha) and uploaded with `hwupload_cuda`:
+
+```yaml
+gort: 'exec:ffmpeg -hide_banner -loglevel error -hwaccel cuda -hwaccel_output_format cuda -rtsp_transport tcp -i rtsp://127.0.0.1:8554/gort_src -re -f image2 -loop 1 -framerate 2 -i /data/overlay/gort_hud.png -filter_complex [1:v]format=yuva420p,hwupload_cuda[hud];[0:v][hud]overlay_cuda=x=0:y=0:eof_action=repeat:repeatlast=1[out] -map [out] -c:v h264_nvenc -preset p4 -tune ll -bf 0 -profile:v main -g 30 -b:v 4M -maxrate 5M -bufsize 10M -an -rtsp_transport tcp -f rtsp {output}'
+```
+
+Notes:
+- `-re` on the image input is required, otherwise ffmpeg reads the PNG once and never sees the per-second updates.
+- `overlay_cuda` needs both inputs in GPU memory, and the HUD image must be the same size as the camera (set `video_size` in `printers.yaml`).
+- Chroma is subsampled in `yuva420p`, so thin coloured HUD edges are slightly softer than with VAAPI's RGBA overlay. It's untested so far; please report results (and GeForce session limits with several printers).
+
