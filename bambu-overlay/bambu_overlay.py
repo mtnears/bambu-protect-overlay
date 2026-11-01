@@ -22,6 +22,7 @@ Update rate: once per second per printer.
 """
 
 import json
+import re
 import logging
 import os
 import ssl
@@ -420,6 +421,7 @@ def update_state(name: str, payload: dict) -> None:
 
         if "gcode_state"       in print_data: s["gcode_state"]    = print_data["gcode_state"]
         if "subtask_name"      in print_data: s["subtask_name"]   = print_data["subtask_name"]
+        if "gcode_file"        in print_data: s["gcode_file"]     = print_data["gcode_file"]
         if "design_id"         in print_data: s["design_id"]      = print_data["design_id"]
         if "mc_percent"        in print_data: s["percent"]        = print_data["mc_percent"]
         if "layer_num"         in print_data: s["layer_num"]      = print_data["layer_num"]
@@ -457,6 +459,9 @@ def update_state(name: str, payload: dict) -> None:
         ams_outer = print_data.get("ams")
         if isinstance(ams_outer, dict):
             tray_now = _to_str(ams_outer.get("tray_now"))
+            if tray_now == "255":                    # nothing loaded (idle / finished)
+                s["filament"] = None
+                s["filament_color"] = None
             ams_units = ams_outer.get("ams") or []
             if isinstance(ams_units, list) and ams_units:
                 active_unit = None
@@ -540,6 +545,10 @@ def build_view(name: str, s: dict) -> dict:
     task = _printable(_to_str(s.get("subtask_name")) or "")
     title = _printable(design_title(s.get("design_id")) or "")
     job, profile = (title, task if task.lower() != title.lower() else "") if title else (task, "")
+    if not job and s.get("gcode_state") not in (None, "IDLE"):
+        # Jobs started from the printer's own storage can arrive without a name.
+        plate = re.search(r"plate_(\d+)", _to_str(s.get("gcode_file")) or "")
+        job = "Unnamed job" + (f" · plate {plate.group(1)}" if plate else "")
     color = None
     fc = s.get("filament_color")
     if fc:
@@ -562,7 +571,7 @@ def build_view(name: str, s: dict) -> dict:
         "nozzle": _to_float(s.get("nozzle")), "nozzle_t": _to_float(s.get("nozzle_target")),
         "bed": _to_float(s.get("bed")), "bed_t": _to_float(s.get("bed_target")),
         "chamber": _to_float(s.get("chamber")), "chamber_t": None,
-        "filament": s.get("filament"), "filament_color": color,
+        "filament": s.get("filament") or "None loaded", "filament_color": color,
         "speed_mag": _to_int(s.get("spd_mag")),
         "speed_level": SPEED_LEVELS.get(lvl, "") if lvl is not None else "",
         "humidity_n": hn, "humidity_label": HUMIDITY_LABELS.get(hn, "") if hn is not None else "",
