@@ -204,9 +204,17 @@ The overlay service renders `<name>_hud.png` once a second (Pillow, about 40 ms 
      devices:
        - /dev/dri:/dev/dri
    ```
-3. In `go2rtc.yaml`, replace the printer's `ffmpeg:...#video=drawtext=...` line with an `exec:` stream that reads the raw stream and the HUD image (Intel VAAPI):
+3. In `go2rtc.yaml`, replace the printer's `ffmpeg:...#video=drawtext=...` line with an `exec:` stream that reads the raw stream and the HUD image. Pick the line for your hardware. **Intel (VAAPI/Quick Sync)**, tested:
    ```yaml
    gort: 'exec:ffmpeg -hide_banner -loglevel error -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -hwaccel vaapi -hwaccel_device va -hwaccel_output_format vaapi -rtsp_transport tcp -i rtsp://127.0.0.1:8554/gort_src -re -f image2 -loop 1 -framerate 2 -i /data/overlay/gort_hud.png -filter_complex [1:v]format=rgba,hwupload[o];[0:v][o]overlay_vaapi=eof_action=repeat:repeatlast=1[out] -map [out] -c:v h264_vaapi -profile:v main -level:v 4.1 -bf:v 0 -g:v 30 -b:v 4M -maxrate:v 5M -bufsize:v 10M -an -rtsp_transport tcp -f rtsp {output}'
+   ```
+   **NVIDIA (CUDA/NVENC)**: needs `runtime: nvidia` and `NVIDIA_DRIVER_CAPABILITIES=compute,video,utility` on the go2rtc service (see [docs/NVIDIA-NVENC.md](docs/NVIDIA-NVENC.md)) instead of `/dev/dri`. *Untested so far; contributed for testing on a T400.*
+   ```yaml
+   gort: 'exec:ffmpeg -hide_banner -loglevel error -hwaccel cuda -hwaccel_output_format cuda -rtsp_transport tcp -i rtsp://127.0.0.1:8554/gort_src -re -f image2 -loop 1 -framerate 2 -i /data/overlay/gort_hud.png -filter_complex [1:v]format=yuva420p,hwupload_cuda[hud];[0:v][hud]overlay_cuda=x=0:y=0:eof_action=repeat:repeatlast=1[out] -map [out] -c:v h264_nvenc -preset p4 -tune ll -bf 0 -profile:v main -g 30 -b:v 4M -maxrate 5M -bufsize 10M -an -rtsp_transport tcp -f rtsp {output}'
+   ```
+   **No GPU (CPU only)**: works anywhere, but decodes, overlays and encodes on the CPU, so it costs about as much as the text overlay (or a bit more):
+   ```yaml
+   gort: 'exec:ffmpeg -hide_banner -loglevel error -rtsp_transport tcp -i rtsp://127.0.0.1:8554/gort_src -re -f image2 -loop 1 -framerate 2 -i /data/overlay/gort_hud.png -filter_complex [0:v][1:v]overlay=eof_action=repeat:repeatlast=1,format=yuv420p[out] -map [out] -c:v libx264 -preset veryfast -profile:v main -bf 0 -g 30 -b:v 4M -maxrate 5M -bufsize 10M -an -rtsp_transport tcp -f rtsp {output}'
    ```
    Keep the `gort_src` line; the exec stream pulls it from go2rtc locally. `-re` on the image input matters: without it ffmpeg reads the PNG once and never sees updates. Output is H.264 Main without B-frames.
 
