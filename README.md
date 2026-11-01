@@ -210,6 +210,13 @@ The overlay service renders `<name>_hud.png` once a second (Pillow, about 40 ms 
    ```
    Keep the `gort_src` line; the exec stream pulls it from go2rtc locally. `-re` on the image input matters: without it ffmpeg reads the PNG once and never sees updates. Output is H.264 Main without B-frames.
 
+**Slicer pauses and the timer.** With `job_files: true` (the default) the overlay downloads the current job's `.gcode.3mf` from the printer once per job, over the printer's FTPS (port 990, the same access code). From the plate's gcode it reads each pause (`M400 U1`, which Bambu Studio's "Add pause" writes) with its layer, plus the slicer's time estimate. The HUD then shows:
+- an amber marker on the progress bar at each pause
+- an alert with the next pause's layer and the time until it ("in 1h 06m (~22:26)")
+- the same note in the big banner while the printer is paused
+
+To give a pause a note, use "Add custom G-code" on that layer in Bambu Studio and write `M400 U1 ; Insert the magnets`, or put the comment on the line above. Without a note the alert shows just the layer and time. The timer dial uses the slicer's total time, falling back to percent complete for jobs it can't read (e.g. started from the printer's own storage without a name). Set `job_files: false` to turn this off.
+
 On a Linux host with a macvlan wrapper, also apply the ARP-flux fix in [docs/LINUX_NETWORKING.md](docs/LINUX_NETWORKING.md), or Protect keeps offering duplicate cameras.
 
 ### Optional: MakerWorld model titles (`printers.yaml`)

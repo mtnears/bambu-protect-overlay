@@ -735,13 +735,22 @@ def make_client(printer: dict) -> mqtt.Client:
 
 def run_printer_thread(printer: dict) -> None:
     name = printer["name"]
+    last_err, repeats = None, 0
     while True:
         try:
             client = make_client(printer)
             client.connect(printer["host"], PORT, keepalive=60)
+            last_err, repeats = None, 0
             client.loop_forever(retry_first_connection=True)
         except Exception as exc:
-            log.error("[%s] connection error: %s", name, exc)
+            # A powered-off printer fails every few seconds; log the first failure and
+            # then every 60th repeat (about every 5 minutes) instead of each one.
+            err = str(exc)
+            repeats = repeats + 1 if err == last_err else 1
+            if repeats == 1 or repeats % 60 == 0:
+                log.error("[%s] connection error: %s%s", name, err,
+                          f" (repeated {repeats}x)" if repeats > 1 else "")
+            last_err = err
             time.sleep(5)
 
 

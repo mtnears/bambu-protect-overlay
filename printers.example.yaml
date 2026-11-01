@@ -52,6 +52,10 @@ overlay_style: text
 # Can also be set per printer with video_size under that printer.
 video_size: 1680x1080
 
+# HUD: read the current job file from the printer (FTPS, port 990) to show slicer
+# pauses, a countdown to the next one, and the slicer's total time. Default true.
+job_files: true
+
 printers:
   - name:   Gort
     host:   192.168.1.170
