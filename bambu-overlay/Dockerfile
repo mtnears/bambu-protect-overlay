@@ -5,12 +5,12 @@ WORKDIR /app
 # tzdata is required for the TZ environment variable to take effect.
 # Without it, the slim image only has UTC available.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends tzdata \
+    && apt-get install -y --no-install-recommends tzdata fonts-inter fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
-RUN pip install --no-cache-dir paho-mqtt==2.1.0 pyyaml==6.0.2
+RUN pip install --no-cache-dir paho-mqtt==2.1.0 pyyaml==6.0.2 pillow==11.3.0
 
-COPY bambu_overlay.py /app/
+COPY bambu_overlay.py hud.py jobfile.py /app/
 
 RUN mkdir -p /data/overlay /config
 

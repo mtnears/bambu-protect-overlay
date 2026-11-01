@@ -37,6 +37,25 @@ makerworld_titles: true
 # 100 fits 1680-px-wide H2 streams at the default 26-px font.
 job_width: 100
 
+# Optional: overlay style. "text" (default) writes four text lines that go2rtc's
+# ffmpeg draws with drawtext. "hud" also renders a graphical HUD (gauges, progress
+# bar, logo) to <name>_hud.png once a second; see "Graphical HUD" in the README
+# for the matching go2rtc stream line.
+overlay_style: text
+
+# HUD only: logo shown in the last gauge slot (path inside the container; mount it
+# in compose.yaml). A transparent PNG works best; opaque black-on-white artwork is
+# turned white automatically. Leave unset to show site_label there instead.
+# logo: /config/logo.png
+
+# HUD only: the printer's video size. H2 series stream 1680x1080, X1C 1760x1080.
+# Can also be set per printer with video_size under that printer.
+video_size: 1680x1080
+
+# HUD: read the current job file from the printer (FTPS, port 990) to show slicer
+# pauses, a countdown to the next one, and the slicer's total time. Default true.
+job_files: true
+
 printers:
   - name:   Gort
     host:   192.168.1.170

@@ -22,6 +22,7 @@ Update rate: once per second per printer.
 """
 
 import json
+import re
 import logging
 import os
 import ssl
@@ -51,6 +52,10 @@ DEFAULTS = {
     "line_width": 80,
     "job_width": 100,
     "makerworld_titles": True,
+    "overlay_style": "text",      # "text" (drawtext lines) or "hud" (graphical, see hud.py)
+    "logo": None,                 # HUD: path inside the container to a logo PNG
+    "video_size": "1920x1080",    # HUD: printer stream size; per-printer override allowed
+    "job_files": True,            # read the job file from the printer (FTPS) for pauses + slicer time
 }
 
 
@@ -105,6 +110,10 @@ def load_config() -> dict:
         "line_width": int(cfg.get("line_width", DEFAULTS["line_width"])),
         "job_width":  int(cfg.get("job_width", DEFAULTS["job_width"])),
         "makerworld_titles": bool(cfg.get("makerworld_titles", DEFAULTS["makerworld_titles"])),
+        "overlay_style": str(cfg.get("overlay_style", DEFAULTS["overlay_style"])).lower(),
+        "logo": cfg.get("logo", DEFAULTS["logo"]),
+        "video_size": str(cfg.get("video_size", DEFAULTS["video_size"])),
+        "job_files": bool(cfg.get("job_files", DEFAULTS["job_files"])),
         "printers":   printers,
     }
 
@@ -119,6 +128,65 @@ SITE_LABEL = ""
 LINE_WIDTH = 80
 JOB_WIDTH  = 100
 DISPLAY_NAMES: dict[str, str] = {}   # internal name -> name shown on line 1
+OVERLAY_STYLE = "text"
+LOGO_PATH: str | None = None
+VIDEO_SIZES: dict[str, tuple[int, int]] = {}   # internal name -> (w, h) for the HUD image
+
+
+JOB_FILES = True
+PRINTERS_BY_NAME: dict[str, dict] = {}
+_jobs: dict[str, dict] = {}        # printer name -> {"key", "info", "fetching", "failed_at"}
+_jobs_lock = threading.Lock()
+JOB_RETRY = 300                    # seconds before retrying a failed job-file read
+
+
+def _job_key(s: dict):
+    return (_to_str(s.get("subtask_name")) or "", _to_str(s.get("gcode_file")) or "")
+
+
+def _fetch_job_thread(name: str, key) -> None:
+    import jobfile
+    p = PRINTERS_BY_NAME[name]
+    info = None
+    try:
+        info = jobfile.fetch_job(p["host"], p["user"], str(p["pass"]), key[0], key[1])
+        if info:
+            log.info("[%s] job %r: %s layers, %s min, pauses at layers %s", name, key[0], info["layers"],
+                     info["total_min"], [x["layer"] for x in info["pauses"]] or "none")
+    except Exception as exc:
+        log.info("[%s] job file read failed: %s", name, exc)
+    with _jobs_lock:
+        _jobs[name] = {"key": key, "info": info, "fetching": False,
+                       "failed_at": 0 if info else time.monotonic()}
+
+
+def maybe_fetch_job(name: str) -> None:
+    """Start a background read of the current job file once per job."""
+    if not JOB_FILES:
+        return
+    with state_lock:
+        s = state[name]
+        gs = s.get("gcode_state")
+        key = _job_key(s)
+    if gs not in ("RUNNING", "PREPARE", "PAUSE") or not key[0]:
+        return
+    with _jobs_lock:
+        e = _jobs.get(name)
+        if e and e["key"] == key and (e["fetching"] or e["info"] or time.monotonic() - e["failed_at"] < JOB_RETRY):
+            return
+        _jobs[name] = {"key": key, "info": None, "fetching": True, "failed_at": 0}
+    threading.Thread(target=_fetch_job_thread, args=(name, key), daemon=True).start()
+
+
+def job_info(name: str, s: dict) -> dict | None:
+    with _jobs_lock:
+        e = _jobs.get(name)
+    return e["info"] if e and e["key"] == _job_key(s) else None
+
+
+def _parse_size(v: str) -> tuple[int, int]:
+    w, h = str(v).lower().split("x")
+    return int(w), int(h)
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +332,7 @@ STAGE_CODES = {
     2:  "Heatbed Preheating",
     3:  "Sweeping XY",
     4:  "Changing Filament",
-    5:  "M400 Pause",
+    5:  "Slicer Pause",
     6:  "Filament Runout",
     7:  "Heating Hotend",
     8:  "Calibrating Extrusion",
@@ -406,6 +474,7 @@ def update_state(name: str, payload: dict) -> None:
 
         if "gcode_state"       in print_data: s["gcode_state"]    = print_data["gcode_state"]
         if "subtask_name"      in print_data: s["subtask_name"]   = print_data["subtask_name"]
+        if "gcode_file"        in print_data: s["gcode_file"]     = print_data["gcode_file"]
         if "design_id"         in print_data: s["design_id"]      = print_data["design_id"]
         if "mc_percent"        in print_data: s["percent"]        = print_data["mc_percent"]
         if "layer_num"         in print_data: s["layer_num"]      = print_data["layer_num"]
@@ -422,7 +491,11 @@ def update_state(name: str, payload: dict) -> None:
         chamber = None
         ctc = print_data.get("device", {}).get("ctc", {}).get("info", {})
         if isinstance(ctc, dict) and "temp" in ctc:
-            chamber = ctc["temp"]
+            # H2-series packs target and current into one int: (target << 16) | current
+            raw = _to_int(ctc["temp"])
+            if raw is not None:
+                chamber = raw & 0xFFFF
+                s["chamber_target"] = raw >> 16
         else:
             info_obj = print_data.get("info")
             if isinstance(info_obj, dict) and "temp" in info_obj:
@@ -443,6 +516,9 @@ def update_state(name: str, payload: dict) -> None:
         ams_outer = print_data.get("ams")
         if isinstance(ams_outer, dict):
             tray_now = _to_str(ams_outer.get("tray_now"))
+            if tray_now == "255":                    # nothing loaded (idle / finished)
+                s["filament"] = None
+                s["filament_color"] = None
             ams_units = ams_outer.get("ams") or []
             if isinstance(ams_units, list) and ams_units:
                 active_unit = None
@@ -466,6 +542,9 @@ def update_state(name: str, payload: dict) -> None:
                             tt = tray.get("tray_type")
                             if tt:
                                 s["filament"] = tt
+                            tc = _to_str(tray.get("tray_color"))
+                            if tc and len(tc) >= 6:
+                                s["filament_color"] = tc[:6]
                             break
 
 
@@ -518,6 +597,79 @@ def render_lines(name: str, s: dict) -> tuple[str, str, str, str]:
     return line1.rstrip(), line2.rstrip(), line3.rstrip(), line4.rstrip()
 
 
+def build_view(name: str, s: dict) -> dict:
+    """Translate raw MQTT state into the plain dict hud.render() draws."""
+    task = _printable(_to_str(s.get("subtask_name")) or "")
+    title = _printable(design_title(s.get("design_id")) or "")
+    job, profile = (title, task if task.lower() != title.lower() else "") if title else (task, "")
+    if not job and s.get("gcode_state") not in (None, "IDLE"):
+        # Jobs started from the printer's own storage can arrive without a name.
+        plate = re.search(r"plate_(\d+)", _to_str(s.get("gcode_file")) or "")
+        job = "Unnamed job" + (f" · plate {plate.group(1)}" if plate else "")
+    color = None
+    fc = s.get("filament_color")
+    if fc:
+        try:
+            color = tuple(int(fc[i:i + 2], 16) for i in (0, 2, 4))
+        except ValueError:
+            color = None
+    hn = _to_int(s.get("humidity"))
+    lvl = _to_int(s.get("spd_lvl"))
+    return {
+        "display": DISPLAY_NAMES.get(name, name),
+        "status": fmt_status(s.get("gcode_state")),
+        "stage": fmt_stage(s.get("stg_cur")) if s.get("stg_cur") is not None else "",
+        "job": job or None,
+        "profile": profile or None,
+        "percent": _to_int(s.get("percent")) or 0,
+        "layer": _to_int(s.get("layer_num")) or 0,
+        "total_layers": _to_int(s.get("total_layer_num")) or 0,
+        "remaining": _to_int(s.get("remaining")),
+        "nozzle": _to_float(s.get("nozzle")), "nozzle_t": _to_float(s.get("nozzle_target")),
+        "bed": _to_float(s.get("bed")), "bed_t": _to_float(s.get("bed_target")),
+        "chamber": _to_float(s.get("chamber")), "chamber_t": _to_float(s.get("chamber_target")),
+        "filament": s.get("filament") or "None loaded", "filament_color": color,
+        "speed_mag": _to_int(s.get("spd_mag")),
+        "speed_level": SPEED_LEVELS.get(lvl, "") if lvl is not None else "",
+        "humidity_n": hn, "humidity_label": HUMIDITY_LABELS.get(hn, "") if hn is not None else "",
+        "pauses": [],
+        "elapsed_frac": None,
+        "logo": LOGO_PATH,
+        "site_label": SITE_LABEL,
+    }
+
+
+def _add_job_info(name: str, s: dict, view: dict) -> None:
+    info = job_info(name, s)
+    if not info:
+        view.pop("elapsed_frac", None)          # renderer falls back to percent complete
+        return
+    view["pauses"] = info["pauses"]
+    total, rem = info.get("total_min"), view.get("remaining")
+    if total and rem is not None:
+        view["elapsed_frac"] = max(0.0, min(1.0, (total - rem) / total))
+    else:
+        view.pop("elapsed_frac", None)
+
+
+def write_hud_file(name: str) -> None:
+    """Render the graphical HUD and replace <name>_hud.png atomically."""
+    import hud   # imported lazily: Pillow is only needed for the HUD style
+    with state_lock:
+        snap = dict(state[name])
+    view = build_view(name, snap)
+    _add_job_info(name, snap, view)
+    img = hud.render(view, VIDEO_SIZES.get(name, (1920, 1080)))
+    if view["status"] == "Paused":
+        # the slicer pause we're sitting at: the last one at or before the current layer
+        here = [x for x in view["pauses"] if x["layer"] <= view["layer"]]
+        hud.paused_banner(img, view["layer"], here[-1]["note"] if here else None)
+    path = OUTPUT_DIR / f"{name.lower()}_hud.png"
+    tmp = path.with_suffix(".tmp.png")
+    img.save(tmp, compress_level=1)
+    os.replace(tmp, path)
+
+
 def write_overlay_files(name: str) -> None:
     """Write four files per printer, one per overlay line, atomically."""
     with state_lock:
@@ -557,6 +709,10 @@ def make_client(printer: dict) -> mqtt.Client:
         if reason_code == 0:
             log.info("[%s] connected", name)
             c.subscribe(topic, qos=0)
+            # Ask for a full status report: printers otherwise send only changed
+            # fields, so the job name etc. would stay blank until the next change.
+            c.publish(f"device/{serial}/request",
+                      json.dumps({"pushing": {"sequence_id": "0", "command": "pushall"}}), qos=0)
         else:
             log.warning("[%s] connect failed: %s", name, reason_code)
 
@@ -579,13 +735,22 @@ def make_client(printer: dict) -> mqtt.Client:
 
 def run_printer_thread(printer: dict) -> None:
     name = printer["name"]
+    last_err, repeats = None, 0
     while True:
         try:
             client = make_client(printer)
             client.connect(printer["host"], PORT, keepalive=60)
+            last_err, repeats = None, 0
             client.loop_forever(retry_first_connection=True)
         except Exception as exc:
-            log.error("[%s] connection error: %s", name, exc)
+            # A powered-off printer fails every few seconds; log the first failure and
+            # then every 60th repeat (about every 5 minutes) instead of each one.
+            err = str(exc)
+            repeats = repeats + 1 if err == last_err else 1
+            if repeats == 1 or repeats % 60 == 0:
+                log.error("[%s] connection error: %s%s", name, err,
+                          f" (repeated {repeats}x)" if repeats > 1 else "")
+            last_err = err
             time.sleep(5)
 
 
@@ -595,6 +760,9 @@ def writer_thread(printers: list) -> None:
         for p in printers:
             try:
                 write_overlay_files(p["name"])
+                maybe_fetch_job(p["name"])
+                if OVERLAY_STYLE == "hud":
+                    write_hud_file(p["name"])
             except Exception as exc:
                 log.warning("[%s] write error: %s", p["name"], exc)
         time.sleep(WRITE_INTERVAL)
@@ -606,6 +774,7 @@ def writer_thread(printers: list) -> None:
 
 def main() -> None:
     global SITE_LABEL, LINE_WIDTH, JOB_WIDTH, MAKERWORLD_TITLES, DISPLAY_NAMES, state
+    global OVERLAY_STYLE, LOGO_PATH, VIDEO_SIZES, JOB_FILES, PRINTERS_BY_NAME
 
     cfg = load_config()
     SITE_LABEL = cfg["site_label"]
@@ -619,6 +788,13 @@ def main() -> None:
     # the key for overlay file names, go2rtc streams and ONVIF config, so a printer can
     # be renamed on screen (e.g. a replacement unit "Huey.v2") without re-adopting it.
     DISPLAY_NAMES = {p["name"]: str(p.get("display") or p["name"]) for p in printers}
+    OVERLAY_STYLE = cfg["overlay_style"]
+    JOB_FILES = cfg["job_files"]
+    PRINTERS_BY_NAME = {p["name"]: p for p in printers}
+    LOGO_PATH = cfg["logo"]
+    VIDEO_SIZES = {p["name"]: _parse_size(p.get("video_size") or cfg["video_size"]) for p in printers}
+    if OVERLAY_STYLE == "hud":
+        log.info("overlay style: hud (writing <name>_hud.png; logo: %s)", LOGO_PATH or "none")
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 

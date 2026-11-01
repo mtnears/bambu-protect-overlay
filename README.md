@@ -190,6 +190,35 @@ printers:
     display: Huey.v2       # shown on the overlay as "HUEY.V2"
 ```
 
+### Optional: Graphical HUD (`overlay_style: hud`)
+
+Instead of four lines of text, the overlay can draw a dashboard: printer name and status (with the current stage, e.g. "Preparing · Calibrating Flow") and the job title in a top banner; a full-width progress bar; and a row of gauges for layer, time remaining (a full-circle timer with the finish time), nozzle, bed and chamber (current vs. target), speed and AMS dryness, plus your logo. Idle printers show only the banner. A large amber banner appears while a print sits in a pause.
+
+The overlay service renders `<name>_hud.png` once a second (Pillow, about 40 ms per printer), and go2rtc's ffmpeg composites it onto the stream. With an Intel iGPU (VAAPI/Quick Sync) the camera is decoded, overlaid and re-encoded entirely on the GPU. On an Intel Core Ultra 5 125H this measured about 5 % of one core per stream, **less than the text overlay** (10-30 % per stream), because the text pipeline decodes and draws on the CPU.
+
+1. In `printers.yaml`: `overlay_style: hud`, `video_size` (H2: `1680x1080`, X1C: `1760x1080`), and optionally `logo: /config/logo.png`.
+2. In `compose.yaml`: mount the logo into `bambu-overlay` (`- ./logo.png:/config/logo.png:ro`), use the go2rtc hardware image and pass the GPU through:
+   ```yaml
+   go2rtc:
+     image: alexxit/go2rtc:latest-hardware
+     devices:
+       - /dev/dri:/dev/dri
+   ```
+3. In `go2rtc.yaml`, replace the printer's `ffmpeg:...#video=drawtext=...` line with an `exec:` stream that reads the raw stream and the HUD image (Intel VAAPI):
+   ```yaml
+   gort: 'exec:ffmpeg -hide_banner -loglevel error -init_hw_device vaapi=va:/dev/dri/renderD128 -filter_hw_device va -hwaccel vaapi -hwaccel_device va -hwaccel_output_format vaapi -rtsp_transport tcp -i rtsp://127.0.0.1:8554/gort_src -re -f image2 -loop 1 -framerate 2 -i /data/overlay/gort_hud.png -filter_complex [1:v]format=rgba,hwupload[o];[0:v][o]overlay_vaapi=eof_action=repeat:repeatlast=1[out] -map [out] -c:v h264_vaapi -profile:v main -level:v 4.1 -bf:v 0 -g:v 30 -b:v 4M -maxrate:v 5M -bufsize:v 10M -an -rtsp_transport tcp -f rtsp {output}'
+   ```
+   Keep the `gort_src` line; the exec stream pulls it from go2rtc locally. `-re` on the image input matters: without it ffmpeg reads the PNG once and never sees updates. Output is H.264 Main without B-frames.
+
+**Slicer pauses and the timer.** With `job_files: true` (the default) the overlay downloads the current job's `.gcode.3mf` from the printer once per job, over the printer's FTPS (port 990, the same access code). From the plate's gcode it reads each pause (`M400 U1`, which Bambu Studio's "Add pause" writes) with its layer, plus the slicer's time estimate. The HUD then shows:
+- an amber marker on the progress bar at each pause
+- an alert with the next pause's layer and the time until it ("in 1h 06m (~22:26)")
+- the same note in the big banner while the printer is paused
+
+To give a pause a note, use "Add custom G-code" on that layer in Bambu Studio and write `M400 U1 ; Insert the magnets`, or put the comment on the line above. Without a note the alert shows just the layer and time. The timer dial uses the slicer's total time, falling back to percent complete for jobs it can't read (e.g. started from the printer's own storage without a name). Set `job_files: false` to turn this off.
+
+On a Linux host with a macvlan wrapper, also apply the ARP-flux fix in [docs/LINUX_NETWORKING.md](docs/LINUX_NETWORKING.md), or Protect keeps offering duplicate cameras.
+
 ### Optional: MakerWorld model titles (`printers.yaml`)
 
 Prints started from **MakerWorld or Bambu Handy** report the print *profile* as the task name, so the Job line would read `Job: 0.2mm layer, 2 walls, 25% infill`. Those prints also carry the MakerWorld `design_id`, so the overlay looks up the model's title through MakerWorld's public design API and shows:
