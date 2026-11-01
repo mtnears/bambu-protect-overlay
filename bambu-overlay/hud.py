@@ -317,7 +317,8 @@ def render(v: dict, size=(1680, 1080), now: datetime | None = None) -> Image.Ima
     dial(d, cx(0), gy, 62, (layer / tl) if tl else pct / 100, f"{pct}%",
          f"{layer} / {tl}" if tl else "-", "LAYER", sc)
     rem = v.get("remaining")
-    clock_dial(d, cx(1), gy - 4, 56, v.get("elapsed_frac", pct / 100), fmt_dur(rem),
+    ef = v.get("elapsed_frac")
+    clock_dial(d, cx(1), gy - 4, 56, ef if ef is not None else pct / 100, fmt_dur(rem),
                ("done " + (now + timedelta(minutes=rem)).strftime("%H:%M")) if rem else "-",
                "REMAINING", sc, gy + 60)
     for i, (lab, val, tgt, vmax, col) in enumerate([

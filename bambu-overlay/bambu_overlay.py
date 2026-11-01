@@ -55,6 +55,7 @@ DEFAULTS = {
     "overlay_style": "text",      # "text" (drawtext lines) or "hud" (graphical, see hud.py)
     "logo": None,                 # HUD: path inside the container to a logo PNG
     "video_size": "1920x1080",    # HUD: printer stream size; per-printer override allowed
+    "job_files": True,            # read the job file from the printer (FTPS) for pauses + slicer time
 }
 
 
@@ -112,6 +113,7 @@ def load_config() -> dict:
         "overlay_style": str(cfg.get("overlay_style", DEFAULTS["overlay_style"])).lower(),
         "logo": cfg.get("logo", DEFAULTS["logo"]),
         "video_size": str(cfg.get("video_size", DEFAULTS["video_size"])),
+        "job_files": bool(cfg.get("job_files", DEFAULTS["job_files"])),
         "printers":   printers,
     }
 
@@ -129,6 +131,57 @@ DISPLAY_NAMES: dict[str, str] = {}   # internal name -> name shown on line 1
 OVERLAY_STYLE = "text"
 LOGO_PATH: str | None = None
 VIDEO_SIZES: dict[str, tuple[int, int]] = {}   # internal name -> (w, h) for the HUD image
+
+
+JOB_FILES = True
+PRINTERS_BY_NAME: dict[str, dict] = {}
+_jobs: dict[str, dict] = {}        # printer name -> {"key", "info", "fetching", "failed_at"}
+_jobs_lock = threading.Lock()
+JOB_RETRY = 300                    # seconds before retrying a failed job-file read
+
+
+def _job_key(s: dict):
+    return (_to_str(s.get("subtask_name")) or "", _to_str(s.get("gcode_file")) or "")
+
+
+def _fetch_job_thread(name: str, key) -> None:
+    import jobfile
+    p = PRINTERS_BY_NAME[name]
+    info = None
+    try:
+        info = jobfile.fetch_job(p["host"], p["user"], str(p["pass"]), key[0], key[1])
+        if info:
+            log.info("[%s] job %r: %s layers, %s min, pauses at layers %s", name, key[0], info["layers"],
+                     info["total_min"], [x["layer"] for x in info["pauses"]] or "none")
+    except Exception as exc:
+        log.info("[%s] job file read failed: %s", name, exc)
+    with _jobs_lock:
+        _jobs[name] = {"key": key, "info": info, "fetching": False,
+                       "failed_at": 0 if info else time.monotonic()}
+
+
+def maybe_fetch_job(name: str) -> None:
+    """Start a background read of the current job file once per job."""
+    if not JOB_FILES:
+        return
+    with state_lock:
+        s = state[name]
+        gs = s.get("gcode_state")
+        key = _job_key(s)
+    if gs not in ("RUNNING", "PREPARE", "PAUSE") or not key[0]:
+        return
+    with _jobs_lock:
+        e = _jobs.get(name)
+        if e and e["key"] == key and (e["fetching"] or e["info"] or time.monotonic() - e["failed_at"] < JOB_RETRY):
+            return
+        _jobs[name] = {"key": key, "info": None, "fetching": True, "failed_at": 0}
+    threading.Thread(target=_fetch_job_thread, args=(name, key), daemon=True).start()
+
+
+def job_info(name: str, s: dict) -> dict | None:
+    with _jobs_lock:
+        e = _jobs.get(name)
+    return e["info"] if e and e["key"] == _job_key(s) else None
 
 
 def _parse_size(v: str) -> tuple[int, int]:
@@ -580,19 +633,37 @@ def build_view(name: str, s: dict) -> dict:
         "speed_level": SPEED_LEVELS.get(lvl, "") if lvl is not None else "",
         "humidity_n": hn, "humidity_label": HUMIDITY_LABELS.get(hn, "") if hn is not None else "",
         "pauses": [],
+        "elapsed_frac": None,
         "logo": LOGO_PATH,
         "site_label": SITE_LABEL,
     }
+
+
+def _add_job_info(name: str, s: dict, view: dict) -> None:
+    info = job_info(name, s)
+    if not info:
+        view.pop("elapsed_frac", None)          # renderer falls back to percent complete
+        return
+    view["pauses"] = info["pauses"]
+    total, rem = info.get("total_min"), view.get("remaining")
+    if total and rem is not None:
+        view["elapsed_frac"] = max(0.0, min(1.0, (total - rem) / total))
+    else:
+        view.pop("elapsed_frac", None)
 
 
 def write_hud_file(name: str) -> None:
     """Render the graphical HUD and replace <name>_hud.png atomically."""
     import hud   # imported lazily: Pillow is only needed for the HUD style
     with state_lock:
-        view = build_view(name, dict(state[name]))
+        snap = dict(state[name])
+    view = build_view(name, snap)
+    _add_job_info(name, snap, view)
     img = hud.render(view, VIDEO_SIZES.get(name, (1920, 1080)))
     if view["status"] == "Paused":
-        hud.paused_banner(img, view["layer"], None)
+        # the slicer pause we're sitting at: the last one at or before the current layer
+        here = [x for x in view["pauses"] if x["layer"] <= view["layer"]]
+        hud.paused_banner(img, view["layer"], here[-1]["note"] if here else None)
     path = OUTPUT_DIR / f"{name.lower()}_hud.png"
     tmp = path.with_suffix(".tmp.png")
     img.save(tmp, compress_level=1)
@@ -680,6 +751,7 @@ def writer_thread(printers: list) -> None:
         for p in printers:
             try:
                 write_overlay_files(p["name"])
+                maybe_fetch_job(p["name"])
                 if OVERLAY_STYLE == "hud":
                     write_hud_file(p["name"])
             except Exception as exc:
@@ -693,7 +765,7 @@ def writer_thread(printers: list) -> None:
 
 def main() -> None:
     global SITE_LABEL, LINE_WIDTH, JOB_WIDTH, MAKERWORLD_TITLES, DISPLAY_NAMES, state
-    global OVERLAY_STYLE, LOGO_PATH, VIDEO_SIZES
+    global OVERLAY_STYLE, LOGO_PATH, VIDEO_SIZES, JOB_FILES, PRINTERS_BY_NAME
 
     cfg = load_config()
     SITE_LABEL = cfg["site_label"]
@@ -708,6 +780,8 @@ def main() -> None:
     # be renamed on screen (e.g. a replacement unit "Huey.v2") without re-adopting it.
     DISPLAY_NAMES = {p["name"]: str(p.get("display") or p["name"]) for p in printers}
     OVERLAY_STYLE = cfg["overlay_style"]
+    JOB_FILES = cfg["job_files"]
+    PRINTERS_BY_NAME = {p["name"]: p for p in printers}
     LOGO_PATH = cfg["logo"]
     VIDEO_SIZES = {p["name"]: _parse_size(p.get("video_size") or cfg["video_size"]) for p in printers}
     if OVERLAY_STYLE == "hud":
