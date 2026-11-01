@@ -131,6 +131,24 @@ iface onvif0 inet static
 
 Then `sudo ifup onvif0`.
 
+## Avoid ARP flux (do this on every Linux host)
+
+By default Linux answers ARP for *any* local IP on *every* interface. With a macvlan wrapper, the host's main NIC therefore also answers "who has <wrapper IP>?" with the host's MAC. UniFi Protect then sees the printer camera under two MACs and keeps offering to adopt a "new" camera, and the UniFi client list can show the host and wrapper IPs swapped.
+
+Make each interface answer only for its own address, and persist it:
+
+```bash
+sudo tee /etc/sysctl.d/90-arp-flux.conf >/dev/null <<'CONF'
+net.ipv4.conf.all.arp_ignore = 1
+net.ipv4.conf.all.arp_announce = 2
+net.ipv4.conf.default.arp_ignore = 1
+net.ipv4.conf.default.arp_announce = 2
+CONF
+sudo sysctl -p /etc/sysctl.d/90-arp-flux.conf
+```
+
+If something on the host advertises itself over mDNS on all interfaces (Homebridge/Avahi, for example), restrict it to the main NIC. Otherwise HomeKit may try to reach it through the wrapper's IP. Details and symptoms are in [TROUBLESHOOTING.md](TROUBLESHOOTING.md#protect-keeps-offering-a-duplicate-camera-linux-hosts).
+
 ## Static IP vs DHCP for the macvlan
 
 The example above assigns a static IP. You can instead let the macvlan get its

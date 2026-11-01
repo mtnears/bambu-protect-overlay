@@ -164,6 +164,9 @@ def fmt_temp_compact(actual, target) -> str:
     if a is None and t is None:
         return "-/-"
     a_str = f"{a:.0f}" if a is not None else "-"
+    # Target 0 means the heater is off (idle/finished); "33/0" reads like a fault.
+    if t is not None and t <= 0:
+        return f"{a_str} (off)"
     t_str = f"{t:.0f}" if t is not None else "-"
     return f"{a_str}/{t_str}"
 

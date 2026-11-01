@@ -102,6 +102,8 @@ It's also just nice to have all your cameras in one place.
 ### Performance notes
 Re-encoding 4× 1080p software-encoded streams uses about **25–50% total CPU** on a Ryzen V1500B, depending on whether you keep the default 30fps profile or tune to a lighter 10–15fps profile. Lower-end NAS CPUs may struggle with multiple printers — start with one, then see [docs/CUSTOMIZING.md → Performance Tuning](docs/CUSTOMIZING.md#performance-tuning) before scaling up.
 
+On a Linux host with an NVIDIA GPU, the encode can move to NVENC and drop to a fraction of a core per stream. See [NVIDIA hardware encoding](docs/NVIDIA-NVENC.md).
+
 ---
 
 ## 🚀 Quick Start
@@ -218,6 +220,7 @@ If you get a black screen on adoption, see [docs/TROUBLESHOOTING.md](docs/TROUBL
 - **[Multi-Printer Setup](docs/MULTI_PRINTER.md)** — adding more than one printer with worked examples
 - **[Customizing the Overlay](docs/CUSTOMIZING.md)** — change colors, position, font size, fields shown
 - **[Troubleshooting](docs/TROUBLESHOOTING.md)** — common issues and fixes
+- **[NVIDIA hardware encoding](docs/NVIDIA-NVENC.md)** — move the overlay re-encode from the CPU to an NVENC GPU (Linux + Docker)
 
 ---
 
@@ -233,6 +236,7 @@ Quick triage:
 | Live view fine but stream can't be played in VLC | RTSP transport — VLC defaults to UDP; use TCP |
 | Wrapper container immediately exits | Virtual MAC conflict with an existing interface, or invalid UUID format |
 | Wrapper logs `Failed to find IP address for MAC` | Macvlan interface not created. See [LINUX_NETWORKING.md](docs/LINUX_NETWORKING.md) (non-Synology hosts) |
+| Protect keeps offering to adopt the same printer again (host's MAC, the wrapper's IP) | Linux "ARP flux": the host NIC answers ARP for the wrapper's macvlan IP. Set `arp_ignore=1` / `arp_announce=2` (see docs) |
 
 Detailed walkthroughs in [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md).
 
