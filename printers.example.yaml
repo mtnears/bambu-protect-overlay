@@ -5,7 +5,8 @@
 # printers.yaml is gitignored to keep credentials out of version control.
 #
 # Each printer needs:
-#   name    - friendly display name shown in the overlay (e.g. "Gort")
+#   name    - short name used for the overlay files, go2rtc stream and ONVIF
+#             config (e.g. "Gort"); also shown on the overlay unless "display" is set
 #   host    - printer's local IP address
 #   user    - always "bblp" for Bambu printers
 #   pass    - the printer's Access Code (Settings -> WLAN -> Access Code)
@@ -14,6 +15,10 @@
 #               openssl s_client -connect <printer-ip>:322 -showcerts \
 #                 </dev/null 2>&1 | grep "subject="
 #             The serial is the CN value (e.g. "XXXXXXXXXXXXXXX")
+#
+# Optional per printer:
+#   display - name shown on the overlay instead of "name" (e.g. "Iron Giant", or
+#             "Huey.v2" for a replacement printer that keeps the old camera slot)
 # ----------------------------------------------------------------------------
 
 # Optional: shown at the start of overlay line 1 (your home/site label)
@@ -27,12 +32,25 @@ line_width: 70
 # Uses the public design API; set to false to keep the overlay fully offline.
 makerworld_titles: true
 
+# Optional: maximum characters on the Job line (default 100). Longer job names
+# and model titles are shortened so they don't run off the edge of the video.
+# 100 fits 1680-px-wide H2 streams at the default 26-px font.
+job_width: 100
+
 printers:
   - name:   Gort
     host:   192.168.1.170
     user:   bblp
     pass:   YOUR_ACCESS_CODE_HERE
     serial: YOUR_SERIAL_NUMBER_HERE
+
+  # A printer whose overlay name differs from its internal name:
+  # - name:    IronGiant
+  #   display: Iron Giant
+  #   host:    192.168.1.70
+  #   user:    bblp
+  #   pass:    YOUR_ACCESS_CODE_HERE
+  #   serial:  YOUR_SERIAL_NUMBER_HERE
 
   # Add more printers as needed:
   # - name:   Dewey

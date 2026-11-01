@@ -28,6 +28,7 @@ import ssl
 import sys
 import threading
 import time
+import unicodedata
 import urllib.request
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -48,6 +49,7 @@ WRITE_INTERVAL = 1.0  # seconds
 DEFAULTS = {
     "site_label": "BAMBU",
     "line_width": 80,
+    "job_width": 100,
     "makerworld_titles": True,
 }
 
@@ -101,6 +103,7 @@ def load_config() -> dict:
     return {
         "site_label": cfg.get("site_label", DEFAULTS["site_label"]),
         "line_width": int(cfg.get("line_width", DEFAULTS["line_width"])),
+        "job_width":  int(cfg.get("job_width", DEFAULTS["job_width"])),
         "makerworld_titles": bool(cfg.get("makerworld_titles", DEFAULTS["makerworld_titles"])),
         "printers":   printers,
     }
@@ -114,6 +117,8 @@ state_lock = threading.Lock()
 state: dict[str, dict] = {}
 SITE_LABEL = ""
 LINE_WIDTH = 80
+JOB_WIDTH  = 100
+DISPLAY_NAMES: dict[str, str] = {}   # internal name -> name shown on line 1
 
 
 # ---------------------------------------------------------------------------
@@ -318,7 +323,9 @@ def fmt_stage(stg_cur) -> str:
 
 MAKERWORLD_API = "https://makerworld.com/api/v1/design-service/design/{}"
 MAKERWORLD_TITLES = True
-_design_titles: dict = {}          # design_id -> title ("" = lookup failed)
+MAKERWORLD_RETRY = 600             # seconds before a failed or empty lookup is tried again
+_design_titles: dict = {}          # design_id -> (title, time of lookup); "" = no title
+_design_pending: set = set()       # design_ids with a lookup in flight
 _design_lock = threading.Lock()
 
 
@@ -332,7 +339,8 @@ def _fetch_design_title(design_id: str) -> None:
     except Exception as e:  # network, HTTP or JSON errors: fall back to subtask_name
         log.info("MakerWorld title lookup for design %s failed: %s", design_id, e)
     with _design_lock:
-        _design_titles[design_id] = title
+        _design_titles[design_id] = (title, time.monotonic())
+        _design_pending.discard(design_id)
     if title:
         log.info("MakerWorld design %s: %s", design_id, title)
 
@@ -343,20 +351,48 @@ def design_title(design_id) -> str | None:
     if not MAKERWORLD_TITLES or not d or d == "0":
         return None
     with _design_lock:
-        if d in _design_titles:
-            return _design_titles[d] or None
-        _design_titles[d] = ""      # placeholder so we only fetch once
+        cached = _design_titles.get(d)
+        if cached and (cached[0] or time.monotonic() - cached[1] < MAKERWORLD_RETRY):
+            return cached[0] or None
+        if d in _design_pending:    # a lookup is already running
+            return cached[0] if cached and cached[0] else None
+        _design_pending.add(d)
     threading.Thread(target=_fetch_design_title, args=(d,), daemon=True).start()
     return None
 
 
-def fmt_job(subtask_name, design_id) -> str:
-    """Model title (from MakerWorld) plus the task/profile name, or just the task name."""
-    task = _to_str(subtask_name) or ""
-    title = design_title(design_id)
+def _printable(text: str) -> str:
+    """Drop characters the overlay font can't draw (emoji, pictographs, joiners)
+    and collapse whitespace. MakerWorld titles often contain emoji, which
+    drawtext would render as empty boxes."""
+    out = []
+    for ch in text:
+        cp = ord(ch)
+        if cp > 0xFFFF or 0x2600 <= cp <= 0x27BF or cp in (0x200D, 0xFE0F, 0xFE0E):
+            continue
+        if unicodedata.category(ch) in ("Cc", "Cf", "Co", "Cs"):
+            continue
+        out.append(ch)
+    return " ".join("".join(out).split())
+
+
+def _fit(text: str, width: int) -> str:
+    return text if len(text) <= width else text[: max(width - 3, 1)].rstrip() + "..."
+
+
+def fmt_job(subtask_name, design_id, width: int = 0) -> str:
+    """Model title (from MakerWorld) plus the task/profile name, or just the task name.
+    Trimmed to `width` characters: the task name in parentheses goes first, then the
+    title is shortened, so the line never runs off the edge of the frame."""
+    task = _printable(_to_str(subtask_name) or "")
+    title = _printable(design_title(design_id) or "")
     if title and task and task.lower() != title.lower():
-        return f"{title}  ({task})"
-    return title or task or "-"
+        job = f"{title}  ({task})"
+        if width and len(job) > width:
+            job = title
+    else:
+        job = title or task or "-"
+    return _fit(job, width) if width else job
 
 
 def update_state(name: str, payload: dict) -> None:
@@ -454,12 +490,12 @@ def render_lines(name: str, s: dict) -> tuple[str, str, str, str]:
     humidity = fmt_humidity(s.get("humidity"))
     speed    = fmt_speed(s.get("spd_lvl"), s.get("spd_mag"))
     stage    = fmt_stage(s.get("stg_cur"))
-    job      = fmt_job(s.get("subtask_name"), s.get("design_id"))
+    job      = fmt_job(s.get("subtask_name"), s.get("design_id"), max(JOB_WIDTH - len("Job: "), 10))
 
     eta_part = f"ETA {eta}" + (f" (done {finish})" if finish else "")
 
     # Line 1: site, name, status (left)  +  date and clock (right)
-    left  = f"{SITE_LABEL}: {name.upper()}   {status}"
+    left  = f"{SITE_LABEL}: {DISPLAY_NAMES.get(name, name).upper()}   {status}"
     right = f"{date} {clock}"
     pad   = max(LINE_WIDTH - len(left) - len(right), 2)
     line1 = left + (" " * pad) + right
@@ -569,15 +605,20 @@ def writer_thread(printers: list) -> None:
 # ---------------------------------------------------------------------------
 
 def main() -> None:
-    global SITE_LABEL, LINE_WIDTH, MAKERWORLD_TITLES, state
+    global SITE_LABEL, LINE_WIDTH, JOB_WIDTH, MAKERWORLD_TITLES, DISPLAY_NAMES, state
 
     cfg = load_config()
     SITE_LABEL = cfg["site_label"]
     LINE_WIDTH = cfg["line_width"]
+    JOB_WIDTH  = cfg["job_width"]
     MAKERWORLD_TITLES = cfg["makerworld_titles"]
     printers   = cfg["printers"]
 
     state = {p["name"]: {} for p in printers}
+    # Optional "display" key: the name shown on the overlay. The internal "name" stays
+    # the key for overlay file names, go2rtc streams and ONVIF config, so a printer can
+    # be renamed on screen (e.g. a replacement unit "Huey.v2") without re-adopting it.
+    DISPLAY_NAMES = {p["name"]: str(p.get("display") or p["name"]) for p in printers}
 
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
