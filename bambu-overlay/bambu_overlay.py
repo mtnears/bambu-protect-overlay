@@ -510,42 +510,69 @@ def update_state(name: str, payload: dict) -> None:
         # Print stage (current activity within a print job - see STAGE_CODES)
         if "stg_cur" in print_data: s["stg_cur"] = print_data["stg_cur"]
 
-        # AMS: humidity + active filament
-        # Schema: print.ams.ams[N].{humidity, tray[]}
-        # Active tray identified by print.ams.tray_now (string ID).
+        # AMS: humidity + active filament.
+        # Units arrive as print.ams.ams[N] = {id, humidity, tray[{id, tray_type, tray_color}]};
+        # incremental reports can carry only some units/trays, so merge them into state.
         ams_outer = print_data.get("ams")
         if isinstance(ams_outer, dict):
-            tray_now = _to_str(ams_outer.get("tray_now"))
-            if tray_now == "255":                    # nothing loaded (idle / finished)
-                s["filament"] = None
-                s["filament_color"] = None
-            ams_units = ams_outer.get("ams") or []
-            if isinstance(ams_units, list) and ams_units:
-                active_unit = None
-                for unit in ams_units:
-                    if not isinstance(unit, dict):
-                        continue
-                    trays = unit.get("tray") or []
-                    if any(_to_str(t.get("id")) == tray_now for t in trays if isinstance(t, dict)):
-                        active_unit = unit
-                        break
-                if active_unit is None and isinstance(ams_units[0], dict):
-                    active_unit = ams_units[0]
+            units = s.setdefault("_ams", {})          # ams id -> {"humidity", "trays": {slot: tray}}
+            for unit in ams_outer.get("ams") or []:
+                if not isinstance(unit, dict) or unit.get("id") is None:
+                    continue
+                u = units.setdefault(_to_str(unit["id"]), {"trays": {}})
+                if "humidity" in unit:
+                    u["humidity"] = unit["humidity"]
+                for tray in unit.get("tray") or []:
+                    if isinstance(tray, dict) and tray.get("id") is not None:
+                        u["trays"].setdefault(_to_str(tray["id"]), {}).update(tray)
+            if "tray_now" in ams_outer:
+                s["tray_now"] = _to_str(ams_outer.get("tray_now"))
 
-                if active_unit:
-                    if "humidity" in active_unit:
-                        s["humidity"] = active_unit["humidity"]
-                    for tray in active_unit.get("tray") or []:
-                        if not isinstance(tray, dict):
-                            continue
-                        if _to_str(tray.get("id")) == tray_now:
-                            tt = tray.get("tray_type")
-                            if tt:
-                                s["filament"] = tt
-                            tc = _to_str(tray.get("tray_color"))
-                            if tc and len(tc) >= 6:
-                                s["filament_color"] = tc[:6]
-                            break
+        # H2-series: the active slot is device.extruder.info[].snow = (ams_id << 8) | slot.
+        # Their ams.tray_now is only the slot number, which repeats across AMS units.
+        ext = print_data.get("device", {}).get("extruder", {}) if isinstance(print_data.get("device"), dict) else {}
+        infos = ext.get("info") if isinstance(ext, dict) else None
+        if isinstance(infos, list) and infos:
+            active = infos[0]
+            if len(infos) > 1:                     # H2D: pick the extruder that is in use
+                cur = _to_int(ext.get("state"))
+                idx = (cur >> 4) & 0xF if cur is not None else 0
+                active = next((i for i in infos if _to_int(i.get("id")) == idx), infos[0])
+            if isinstance(active, dict) and "snow" in active:
+                s["snow"] = _to_int(active["snow"])
+
+        _resolve_filament(s)
+
+
+def _resolve_filament(s: dict) -> None:
+    """Work out the loaded AMS tray and set filament, filament_color and humidity."""
+    units = s.get("_ams") or {}
+    ams_id = slot = None
+    snow = s.get("snow")
+    if snow is not None:                            # H2: (ams_id << 8) | slot
+        ams_id, slot = snow >> 8, snow & 0xFF
+        if ams_id >= 0xFE or slot == 0xFF:          # external spool or nothing loaded
+            ams_id = None
+    else:                                           # X1/P1: global index ams_id * 4 + slot
+        n = _to_int(s.get("tray_now"))
+        if n is not None and n < 254:
+            ams_id, slot = n // 4, n % 4
+    if ams_id is None:
+        if snow is not None or s.get("tray_now") in ("254", "255"):
+            s["filament"] = s["filament_color"] = None
+        first = units.get("0") or next(iter(units.values()), None)
+        if first and "humidity" in first:           # still show AMS dryness when idle
+            s["humidity"] = first["humidity"]
+        return
+    u = units.get(str(ams_id))
+    if not u:
+        return
+    if "humidity" in u:
+        s["humidity"] = u["humidity"]
+    t = u["trays"].get(str(slot)) or {}
+    s["filament"] = t.get("tray_type") or None
+    tc = _to_str(t.get("tray_color"))
+    s["filament_color"] = tc[:6] if tc and len(tc) >= 6 else None
 
 
 # ---------------------------------------------------------------------------
