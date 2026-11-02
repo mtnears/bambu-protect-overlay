@@ -324,7 +324,7 @@ function dial(frac, color, big, sub, label, tfrac) {
       stroke-dasharray="75 100" transform="rotate(135 50 50)"/>
     <circle cx="50" cy="50" r="41" pathLength="100" fill="none" stroke="${color}" stroke-width="8" stroke-linecap="round"
       stroke-dasharray="${(75 * f).toFixed(1)} 100" transform="rotate(135 50 50)"/>${tick}
-    <text x="50" y="${sub ? 52 : 58}" text-anchor="middle" font-size="${String(big).length > 4 ? 19 : 25}" font-weight="800" fill="#f2f4f7">${big}</text>
+    <text x="50" y="${sub ? 52 : 58}" text-anchor="middle" font-size="${String(big).replace("°", "").length > 4 ? 19 : 25}" font-weight="800" fill="#f2f4f7">${big}</text>
     ${sub ? `<text x="50" y="69" text-anchor="middle" font-size="11" fill="#9aa4b2">${sub}</text>` : ""}
   </svg><div class="gl">${label}</div></div>`;
 }
@@ -333,11 +333,13 @@ function gaugeRow(s, compact) {
   const rem = s.remaining != null ? (s.remaining >= 60 ? Math.floor(s.remaining / 60) + "h" + String(s.remaining % 60).padStart(2, "0") : s.remaining + "m") : "–";
   const done = s.remaining != null && s.state === "printing" ? fmtClock(new Date(Date.now() + s.remaining * 60000)).replace(/\s?[AP]M$/i, "") : "";
   const t = (v, max) => v == null ? 0 : v / max;
+  const deg = v => v == null ? "–" : v + "°";
   let g = dial(lf, "#3ddc84", (s.percent ?? 0) + "%", s.layers ? `${s.layer}/${s.layers}` : "", "Layer") +
           dial((s.percent || 0) / 100, "#2ec4b6", rem, done ? "done " + done : "", "Remaining") +
-          dial(t(s.nozzle, 300), "#ff7a3d", s.nozzle ?? "–", s.nozzle_t ? "→ " + s.nozzle_t + "°" : "", "Nozzle", s.nozzle_t ? s.nozzle_t / 300 : null) +
-          dial(t(s.bed, 120), "#ffb020", s.bed ?? "–", s.bed_t ? "→ " + s.bed_t + "°" : "", "Bed", s.bed_t ? s.bed_t / 120 : null);
-  if (s.chamber != null) g += dial(t(s.chamber, 80), "#4aa8ff", s.chamber, s.chamber_t ? "→ " + s.chamber_t + "°" : "", "Chamber", s.chamber_t ? s.chamber_t / 80 : null);
+          // temperatures: "270°" big, "target 270°" under it, unit in the label (no target = no heater, e.g. X1C chamber)
+          dial(t(s.nozzle, 300), "#ff7a3d", deg(s.nozzle), s.nozzle_t ? "target " + s.nozzle_t + "°" : "", "Nozzle °C", s.nozzle_t ? s.nozzle_t / 300 : null) +
+          dial(t(s.bed, 120), "#ffb020", deg(s.bed), s.bed_t ? "target " + s.bed_t + "°" : "", "Bed °C", s.bed_t ? s.bed_t / 120 : null);
+  if (s.chamber != null) g += dial(t(s.chamber, 80), "#4aa8ff", deg(s.chamber), s.chamber_t ? "target " + s.chamber_t + "°" : "", "Chamber °C", s.chamber_t ? s.chamber_t / 80 : null);
   return g;
 }
 const cams = {};

@@ -15,7 +15,7 @@ It is independent of UniFi Protect. Run the Protect path, the shop view, or both
 - **Nothing printing:** a large clock and date that drift slowly (a screensaver), and a card per printer with its loaded filament.
 - **1 job:** that printer's HUD stream full screen (with `overlay_style: hud`), otherwise its camera full screen with dials.
 - **2 jobs:** side by side. **3:** one large and two small. **4:** 2x2. **5:** 3x2 with the clock in the sixth cell.
-- Each tile: name, status (or the current stage, e.g. "Auto Bed Leveling"), job, progress bar with slicer-pause markers, and dials for layer, time remaining (with finish time), nozzle, bed and chamber (current, with a tick at the target).
+- Each tile: name, status (or the current stage, e.g. "Auto Bed Leveling"), job, progress bar with slicer-pause markers, and dials for layer, time remaining (with finish time), nozzle, bed and chamber in °C (current, with "target" and a tick at the target; no target is shown where the printer has no heater, e.g. an X1C chamber).
 - An amber frame and banner while a printer is paused (with the pause note), a countdown before an upcoming slicer pause, and a green "Done" (or red "Failed") frame that stays for 15 minutes after a job ends.
 - A red banner if the status feed stops updating.
 
