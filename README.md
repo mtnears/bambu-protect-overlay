@@ -46,6 +46,7 @@ Four-line strip across the bottom of the frame on a single solid translucent bar
 - [Configuration](#configuration)
 - [Multiple Printers](#multiple-printers)
 - [UniFi Protect Adoption](#unifi-protect-adoption)
+- [Shop View (browsers and TVs)](#shop-view-browsers-and-tvs)
 - [Documentation](#documentation)
 - [Troubleshooting](#troubleshooting)
 - [Resource Usage](#resource-usage)
@@ -274,6 +275,20 @@ If you get a black screen on adoption, see [docs/TROUBLESHOOTING.md](docs/TROUBL
 
 ---
 
+## 📺 Shop View (browsers and TVs)
+
+Optional: a web page that shows your printers on any browser or smart TV, with no keyboard or remote needed. Live camera tiles with HUD-style dials (layer, time remaining, nozzle, bed, chamber with target marks), the printer's full HUD when one job is running, slicer-pause countdowns, "Done" frames when a job finishes, and a drifting clock screensaver when nothing is printing. The layout follows the jobs on its own (1 to 5 printers).
+
+It works with or without UniFi Protect: the overlay writes `status.json` either way, and the page reads it.
+
+```bash
+docker compose --profile shop-view up -d     # then open http://<host>:8130/shop
+```
+
+Tested on Edge/Chrome, a Fire TV's Silk browser and an LG TV's browser. TV browsers use MJPEG copies of the streams; see **[docs/SHOP_VIEW.md](docs/SHOP_VIEW.md)** for the go2rtc lines, per-browser notes and options.
+
+---
+
 ## 📚 Documentation
 
 - **[Installation Guide](docs/INSTALLATION.md)** — step-by-step setup on Synology, including DSM-specific gotchas
@@ -281,6 +296,7 @@ If you get a black screen on adoption, see [docs/TROUBLESHOOTING.md](docs/TROUBL
 - **[Multi-Printer Setup](docs/MULTI_PRINTER.md)** — adding more than one printer with worked examples
 - **[Customizing the Overlay](docs/CUSTOMIZING.md)** — change colors, position, font size, fields shown
 - **[Troubleshooting](docs/TROUBLESHOOTING.md)** — common issues and fixes
+- **[Shop view](docs/SHOP_VIEW.md)** — the printers on a browser or TV: setup, browser/TV notes, options
 - **[NVIDIA hardware encoding](docs/NVIDIA-NVENC.md)** — move the overlay re-encode from the CPU to an NVENC GPU (Linux + Docker)
 
 ---

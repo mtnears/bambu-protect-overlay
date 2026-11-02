@@ -19,6 +19,8 @@
 # Optional per printer:
 #   display - name shown on the overlay instead of "name" (e.g. "Iron Giant", or
 #             "Huey.v2" for a replacement printer that keeps the old camera slot)
+#   camera  - false if this printer has no camera stream in go2rtc (the shop view
+#             then shows "Camera off" for it); default true
 # ----------------------------------------------------------------------------
 
 # Optional: shown at the start of overlay line 1 (your home/site label)

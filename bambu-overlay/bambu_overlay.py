@@ -724,7 +724,9 @@ def printer_status(name: str, now: float) -> dict:
         if gs == "PAUSE":
             m["paused_at"] = now
         m["prev"] = gs
-    out = {"name": name, "display": DISPLAY_NAMES.get(name, name)}
+    out = {"name": name, "display": DISPLAY_NAMES.get(name, name),
+           # printers.yaml "camera: false" = no camera stream in go2rtc (the shop view shows "Camera off")
+           "camera": bool((PRINTERS_BY_NAME.get(name) or {}).get("camera", True))}
     if not CONNECTED.get(name) or not gs:
         out["state"] = "offline"
         return out
@@ -778,6 +780,7 @@ def printer_status(name: str, now: float) -> dict:
 def write_status_file(printers: list) -> None:
     now = time.time()
     doc = {"updated": datetime.now().astimezone().isoformat(timespec="seconds"),
+           "site_label": SITE_LABEL,
            "printers": [printer_status(p["name"], now) for p in printers]}
     path = OUTPUT_DIR / "status.json"
     tmp = path.with_suffix(".tmp")
