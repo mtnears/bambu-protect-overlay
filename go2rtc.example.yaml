@@ -42,6 +42,12 @@ streams:
   # The "drawtext=NAME" suffix references a custom template defined below.
   gort: ffmpeg:gort_src#video=drawtext=gort
 
+  # Optional, for the shop view on TV browsers (see docs/SHOP_VIEW.md). On demand only:
+  # ffmpeg runs only while a screen is watching. Computers and the Fire TV (up to two
+  # tiles) play the streams above over WebRTC and don't need these.
+  # gort_mjpeg: ffmpeg:gort_src#video=mjpeg#width=960     # camera tiles
+  # gort_hudmjpeg: ffmpeg:gort#video=mjpeg                # one job full screen (HUD style)
+
 ffmpeg:
   # Per-printer drawtext templates.
   #

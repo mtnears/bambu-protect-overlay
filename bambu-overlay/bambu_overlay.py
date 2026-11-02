@@ -697,6 +697,97 @@ def write_hud_file(name: str) -> None:
     os.replace(tmp, path)
 
 
+# ---------------------------------------------------------------------------
+# Status feed for screens (status.json)
+# ---------------------------------------------------------------------------
+# One JSON file with every printer's state, written next to the overlay images
+# once per second. The display service (shop TV view) reads it; it carries no
+# printer addresses, serials or access codes.
+
+CONNECTED: dict[str, bool] = {}
+_marks: dict[str, dict] = {}    # name -> {"prev": gcode_state, "finished_at", "paused_at"}
+STATE_MAP = {"RUNNING": "printing", "PREPARE": "printing", "SLICING": "printing",
+             "PAUSE": "paused", "FINISH": "finished", "FAILED": "failed", "IDLE": "idle"}
+
+
+def printer_status(name: str, now: float) -> dict:
+    """One printer's entry in status.json."""
+    with state_lock:
+        snap = dict(state[name])
+    gs = _to_str(snap.get("gcode_state")) or ""
+    m = _marks.setdefault(name, {"prev": None, "finished_at": None, "paused_at": None})
+    if gs != m["prev"]:
+        # Times are only known for changes seen while running; after a restart a
+        # finished job counts as long done and a pause as just started.
+        if gs == "FINISH" and m["prev"] is not None:
+            m["finished_at"] = now
+        if gs == "PAUSE":
+            m["paused_at"] = now
+        m["prev"] = gs
+    out = {"name": name, "display": DISPLAY_NAMES.get(name, name),
+           # printers.yaml "camera: false" = no camera stream in go2rtc (the shop view shows "Camera off")
+           "camera": bool((PRINTERS_BY_NAME.get(name) or {}).get("camera", True))}
+    if not CONNECTED.get(name) or not gs:
+        out["state"] = "offline"
+        return out
+    view = build_view(name, snap)
+    _add_job_info(name, snap, view)
+    st = STATE_MAP.get(gs, "idle")
+    rgb = view.get("filament_color")
+    out.update({
+        "state": st,
+        "filament": view["filament"],
+        "color": "%02x%02x%02x" % rgb if rgb else None,
+    })
+    if m["finished_at"]:
+        out["last"] = round((now - m["finished_at"]) / 60)
+    if st == "idle":
+        return out
+    rem = view.get("remaining")
+    out.update({
+        "job": view["job"], "percent": view["percent"], "layer": view["layer"],
+        "layers": view["total_layers"], "remaining": rem,
+        "stage": view["stage"] if view["stage"] not in ("", "-", "Printing", "Idle") else None,
+        "nozzle": round(view["nozzle"]) if view["nozzle"] is not None else None,
+        "bed": round(view["bed"]) if view["bed"] is not None else None,
+        "chamber": round(view["chamber"]) if view["chamber"] is not None else None,
+        "nozzle_t": round(view["nozzle_t"]) if view.get("nozzle_t") else None,
+        "bed_t": round(view["bed_t"]) if view.get("bed_t") else None,
+        "chamber_t": round(view["chamber_t"]) if view.get("chamber_t") else None,
+    })
+    if st in ("finished", "failed"):
+        out["done_ago"] = round((now - m["finished_at"]) / 60) if m["finished_at"] else 9999
+        return out
+    pauses = view.get("pauses") or []
+    total = (job_info(name, snap) or {}).get("total_min")
+    if st == "printing":
+        nxt = next((x for x in pauses if x["layer"] > view["layer"]), None)
+        if nxt:
+            if rem is not None and nxt.get("remaining_at") is not None:
+                out["pause_in"] = max(0, rem - nxt["remaining_at"])
+                if total:
+                    out["pause_frac"] = round(max(0.0, min(1.0, (total - nxt["remaining_at"]) / total)), 4)
+            out["pause_note"] = nxt.get("note")
+            out["pause_layer"] = nxt["layer"]
+    else:   # paused
+        here = [x for x in pauses if x["layer"] <= view["layer"]]
+        out["pause_note"] = here[-1]["note"] if here else None
+        if m["paused_at"]:
+            out["paused_for"] = round((now - m["paused_at"]) / 60)
+    return out
+
+
+def write_status_file(printers: list) -> None:
+    now = time.time()
+    doc = {"updated": datetime.now().astimezone().isoformat(timespec="seconds"),
+           "site_label": SITE_LABEL,
+           "printers": [printer_status(p["name"], now) for p in printers]}
+    path = OUTPUT_DIR / "status.json"
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(doc, separators=(",", ":")))
+    os.replace(tmp, path)
+
+
 def write_overlay_files(name: str) -> None:
     """Write four files per printer, one per overlay line, atomically."""
     with state_lock:
@@ -734,6 +825,7 @@ def make_client(printer: dict) -> mqtt.Client:
 
     def on_connect(c, userdata, flags, reason_code, properties):
         if reason_code == 0:
+            CONNECTED[name] = True
             log.info("[%s] connected", name)
             c.subscribe(topic, qos=0)
             # Ask for a full status report: printers otherwise send only changed
@@ -744,6 +836,7 @@ def make_client(printer: dict) -> mqtt.Client:
             log.warning("[%s] connect failed: %s", name, reason_code)
 
     def on_disconnect(c, userdata, flags, reason_code, properties):
+        CONNECTED[name] = False
         log.info("[%s] disconnected (%s)", name, reason_code)
 
     def on_message(c, userdata, msg):
@@ -792,6 +885,10 @@ def writer_thread(printers: list) -> None:
                     write_hud_file(p["name"])
             except Exception as exc:
                 log.warning("[%s] write error: %s", p["name"], exc)
+        try:
+            write_status_file(printers)
+        except Exception as exc:
+            log.warning("status.json write error: %s", exc)
         time.sleep(WRITE_INTERVAL)
 
 

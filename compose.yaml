@@ -1,7 +1,7 @@
 # ----------------------------------------------------------------------------
 # Bambu Protect Overlay - Docker Compose
 # ----------------------------------------------------------------------------
-# Three services:
+# Three services (plus the optional shop view, profile "shop-view"):
 #   go2rtc           - pulls RTSPS streams from Bambu printers, transcodes with overlay
 #   rtsp-to-onvif    - wraps go2rtc streams as ONVIF cameras for UniFi Protect adoption
 #   bambu-overlay    - subscribes to printer MQTT and writes overlay text every second
@@ -45,6 +45,19 @@ services:
     volumes:
       - ./printers.yaml:/config/printers.yaml:ro
       - overlay-data:/data/overlay
+
+  # Optional: the shop view for browsers and TVs (docs/SHOP_VIEW.md).
+  # Start it with: docker compose --profile shop-view up -d
+  shop-view:
+    image: nginx:1.27-alpine
+    container_name: shop-view
+    network_mode: host                 # listens on 8130; reaches go2rtc on 127.0.0.1:1984
+    restart: unless-stopped
+    profiles: ["shop-view"]
+    volumes:
+      - ./shop-view/nginx.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./shop-view:/www:ro
+      - overlay-data:/overlay:ro       # status.json from bambu-overlay
 
 volumes:
   overlay-data:

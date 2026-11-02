@@ -1,0 +1,711 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Shop View</title>
+<!--
+  Shop TV view for the Bambu printers on mtnears-srv1.
+  Layout: 0 jobs = idle screen; 1 = full screen; 2 = side by side; 3 = one large + two;
+  4 = 2x2; 5 = 3x2 with the clock panel in the sixth cell.
+  The page draws a fixed 1920x1080 stage and scales it to the window, so a laptop
+  and a TV show the same picture.
+
+  Demo mode (now): simulated jobs on top of the real cameras.
+    ?demo=0..5     pick a scenario (keys 0-5 also switch; D toggles the demo bar)
+    ?video=0       still frames from go2rtc every few seconds instead of live video
+  Live mode (later): ?live=1 reads printer status from the overlay service.
+-->
+<style>
+  :root {
+    --cw: 10px; --ch: 10px;
+    --bg: #0b0d10;
+    --panel: #14181d;
+    --panel-2: #1b2027;
+    --line: #2a313a;
+    --text: #f2f4f7;
+    --dim: #9aa4b2;
+    --faint: #5d6774;
+    --green: #3ddc84;
+    --amber: #ffb020;
+    --blue: #4aa8ff;
+    --red: #ff5a5a;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; background: #000; overflow: hidden; }
+  body { font-family: "Inter", "Segoe UI", system-ui, -apple-system, Roboto, Helvetica, Arial, sans-serif;
+         color: var(--text); -webkit-font-smoothing: antialiased; cursor: none; }
+  body.show-cursor { cursor: default; }
+
+  #stage { position: fixed; left: 0; top: 0; width: 1920px; height: 1080px;
+           transform-origin: 0 0; background: var(--bg); overflow: hidden; }
+
+  /* ---------- tiles ---------- */
+  .grid { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: grid; gap: 10px; padding: 10px; }
+  .tile { position: relative; background: var(--panel); border-radius: 14px; overflow: hidden;
+          display: flex; flex-direction: column; min-width: 0; min-height: 0;
+          outline: 0 solid transparent; outline-offset: -6px; }
+  .tile.paused   { outline: 6px solid var(--amber); }
+  .tile.finished { outline: 6px solid var(--green); }
+  .tile.failed   { outline: 6px solid var(--red); }
+  .tile.failed .state { color: var(--red); }
+  .tile.failed .bar > i { background: var(--red); }
+  .banner.fail { background: var(--red); color: #2a0000; }
+  body.stale #stage::after { content: "No printer data from srv1 — showing the last update"; position: absolute; left: 50%;
+    top: 20px; transform: translateX(-50%); padding: 10px 22px; border-radius: 10px; background: var(--red); color: #fff;
+    font-size: 26px; font-weight: 700; z-index: 20; }
+  .cam.hud img { object-fit: contain; background: #000; }
+  .tile[data-chip] .banner { padding-right: 300px; }
+  .banner > span:not(.msg) { white-space: nowrap; flex: none; }
+  .gauges { display: flex; justify-content: space-around; align-items: flex-start; }
+  .gauges .g { width: calc(var(--cw) * 15); text-align: center; }
+  .gauges.tight .g { width: calc(var(--cw) * 11.5); }
+  .gauges svg { width: 100%; height: auto; display: block; }
+  .gauges .gl { margin-top: calc(var(--cw) * -1.6); font-size: calc(var(--cw) * 1.7); letter-spacing: .12em;
+                text-transform: uppercase; color: var(--dim); white-space: nowrap; }
+  /* go2rtc's player adds its own status label and the browser adds video controls: hide both */
+  video-stream > .info { display: none !important; }
+  .cam video::-webkit-media-controls, .cam video::-webkit-media-controls-enclosure { display: none !important; }
+  .cam.hud video { object-fit: contain !important; background: #000; }
+  .tile.quiet .cam { filter: saturate(.5) brightness(.7); }
+
+  .cam { position: relative; flex: none; width: 100%; height: calc(var(--cw) * 56.25); background: #000; overflow: hidden; }
+  .tile.overlay .cam { position: absolute; top: 0; right: 0; bottom: 0; left: 0; height: 100%; }
+  .cam video, .cam img { position: absolute; top: 0; right: 0; bottom: 0; left: 0; width: 100%; height: 100%; object-fit: cover; display: block; }
+  .cam video-stream { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: block; }
+  .cam .nocam { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: grid; place-items: center; color: var(--faint);
+                font-size: calc(var(--cw) * 3.2); letter-spacing: .08em; text-transform: uppercase;
+                background: repeating-linear-gradient(135deg, #101317 0 18px, #0d1013 18px 36px); }
+
+  .tinfo { flex: 1; min-height: 0; padding: calc(var(--cw) * 1.6) calc(var(--cw) * 2.8); display: flex; flex-direction: column;
+          justify-content: center; gap: calc(var(--cw) * 1.1); overflow: hidden; }
+  .tile.overlay .tinfo { position: absolute; left: 0; right: 0; bottom: 0; flex: none; justify-content: flex-end;
+          padding: calc(var(--cw) * 6) calc(var(--cw) * 2.6) calc(var(--cw) * 2.2);
+          background: linear-gradient(to top, rgba(8,10,13,.94) 0%, rgba(8,10,13,.86) 55%, rgba(8,10,13,0) 100%); }
+
+  .row1 { display: flex; align-items: baseline; gap: calc(var(--cw) * 2); min-width: 0; }
+  .pname { font-weight: 800; font-size: calc(var(--cw) * 5); line-height: 1; letter-spacing: -.01em; white-space: nowrap; }
+  .state { font-weight: 700; font-size: calc(var(--cw) * 2.4); letter-spacing: .1em; text-transform: uppercase; color: var(--blue);
+           white-space: nowrap; }
+  .tile.paused .state { color: var(--amber); }
+  .tile.finished .state { color: var(--green); }
+  .job { font-size: calc(var(--cw) * 3.1); color: var(--dim); white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+         min-width: 0; flex: 1; text-align: right; }
+
+  .bar { position: relative; height: calc(var(--cw) * 1.9); min-height: 10px; border-radius: 99px; background: #262d36; overflow: hidden; }
+  .bar > i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 99px; background: var(--blue); }
+  .tile.paused .bar > i { background: var(--amber); }
+  .tile.finished .bar > i { background: var(--green); }
+  .bar > b { position: absolute; top: -20%; bottom: -20%; width: 3px; background: var(--amber);
+             box-shadow: 0 0 0 2px rgba(0,0,0,.6); }
+
+  .row2 { display: flex; align-items: baseline; gap: calc(var(--cw) * 3); white-space: nowrap; }
+  .pct { font-weight: 800; font-size: calc(var(--cw) * 6); line-height: 1; font-variant-numeric: tabular-nums; }
+  .rem { font-weight: 700; font-size: calc(var(--cw) * 4.2); font-variant-numeric: tabular-nums; }
+  .eta { font-size: calc(var(--cw) * 2.7); color: var(--dim); font-variant-numeric: tabular-nums; }
+  .layer { margin-left: auto; font-size: calc(var(--cw) * 2.7); color: var(--dim); font-variant-numeric: tabular-nums; }
+
+  .row3 { display: flex; align-items: center; gap: calc(var(--cw) * 2.4); font-size: calc(var(--cw) * 2.3); color: var(--dim);
+          white-space: nowrap; font-variant-numeric: tabular-nums; }
+  .fil { display: inline-flex; align-items: center; gap: calc(var(--cw) * 1); }
+  .dot { width: calc(var(--cw) * 2.2); height: calc(var(--cw) * 2.2); border-radius: 50%; border: 2px solid rgba(255,255,255,.35); flex: none; }
+  .temps { margin-left: auto; display: flex; gap: calc(var(--cw) * 2.4); }
+  .temps span b { color: var(--text); font-weight: 600; }
+
+  .alert { display: flex; align-items: center; gap: calc(var(--cw) * 1.6); padding: calc(var(--cw) * 1.2) calc(var(--cw) * 1.8); border-radius: calc(var(--cw) * 1.2);
+           font-size: calc(var(--cw) * 2.9); font-weight: 600; background: rgba(255,176,32,.14); color: var(--amber);
+           white-space: nowrap; overflow: hidden; }
+  .alert .msg { overflow: hidden; text-overflow: ellipsis; color: var(--text); font-weight: 500; }
+  .alert.done { background: rgba(61,220,132,.14); color: var(--green); }
+  .pi { flex: none; width: calc(var(--cw) * 2.6); height: calc(var(--cw) * 2.6); display: inline-flex; gap: 22%; justify-content: center; }
+  .pi::before, .pi::after { content: ""; width: 32%; height: 100%; background: currentColor; border-radius: 2px; }
+
+  /* big paused banner across the camera */
+  .banner { position: absolute; left: 0; right: 0; top: 0; padding: calc(var(--cw) * 1.6) calc(var(--cw) * 2.6); display: flex; align-items: center;
+            gap: calc(var(--cw) * 2); background: var(--amber); color: #1a1200; font-weight: 800; font-size: calc(var(--cw) * 4);
+            letter-spacing: .04em; }
+  .banner .msg { font-weight: 600; letter-spacing: 0; font-size: calc(var(--cw) * 3.2); overflow: hidden; text-overflow: ellipsis;
+                 white-space: nowrap; }
+  .banner .pi { width: calc(var(--cw) * 3.6); height: calc(var(--cw) * 3.6); }
+  .banner.done { background: var(--green); color: #032011; }
+  .tile.overlay .banner { top: 0; }
+
+  /* clock chip shown on layouts without a clock panel */
+  .chip { position: absolute; top: 22px; right: 22px; padding: 10px 18px; border-radius: 12px;
+          background: rgba(8,10,13,.72); font-size: 30px; font-weight: 700; font-variant-numeric: tabular-nums;
+          display: flex; gap: 14px; align-items: baseline; z-index: 5; }
+  .chip small { font-size: 18px; color: var(--dim); font-weight: 600; letter-spacing: .12em; }
+
+  /* ---------- clock panel (sixth cell / idle) ---------- */
+  .clockpanel { background: var(--panel); border-radius: 14px; display: flex;
+                flex-direction: column; justify-content: space-between; padding: calc(var(--cw) * 6); }
+  .brand { display: flex; align-items: center; gap: calc(var(--cw) * 3); }
+  .mark { width: calc(var(--cw) * 11); height: calc(var(--cw) * 11); border-radius: 50%; border: calc(var(--cw) * .9) solid var(--green); display: grid;
+          place-items: center; font-weight: 900; font-size: calc(var(--cw) * 4.4); color: var(--green); flex: none; }
+  .brand .word { font-weight: 800; font-size: calc(var(--cw) * 6); letter-spacing: .06em; }
+  .brand .sub { font-size: calc(var(--cw) * 3); color: var(--dim); letter-spacing: .12em; text-transform: uppercase; }
+  .bigtime { font-weight: 800; font-size: calc(var(--cw) * 19); line-height: .95; font-variant-numeric: tabular-nums; letter-spacing: -.02em; }
+  .bigdate { font-size: calc(var(--cw) * 5); color: var(--dim); margin-top: calc(var(--cw) * 1.5); }
+  .mini { display: grid; gap: calc(var(--cw) * 1.6); }
+  .mini div { display: flex; align-items: center; gap: calc(var(--cw) * 2); font-size: calc(var(--cw) * 4); color: var(--dim); }
+  .mini b { color: var(--text); font-weight: 600; min-width: 34%; }
+  .mini .st { margin-left: auto; font-size: calc(var(--cw) * 3.2); letter-spacing: .1em; text-transform: uppercase; }
+
+  /* ---------- idle screen ---------- */
+  .idlescreen { position: absolute; top: 0; right: 0; bottom: 0; left: 0; display: flex; flex-direction: column; padding: 70px 80px 60px; }
+  .idlescreen .top { display: flex; justify-content: space-between; align-items: flex-start; }
+  .idlescreen .mark { width: 120px; height: 120px; border-width: 10px; font-size: 46px; }
+  .idlescreen .word { font-size: 60px; font-weight: 800; letter-spacing: .06em; }
+  .idlescreen .sub { font-size: 26px; color: var(--dim); letter-spacing: .14em; text-transform: uppercase; }
+  .idlescreen .brand { gap: 30px; }
+  .idlescreen .center { flex: 1; display: flex; flex-direction: column; justify-content: center; align-items: center;
+                        transform: translate(var(--cx, 0px), var(--cy, 0px)); transition: transform 12s ease-in-out; }
+  .idlescreen .strip, .idlescreen .top { transform: translate(var(--sx, 0px), var(--sy, 0px)); transition: transform 12s ease-in-out; }
+  .idlescreen .time { font-size: 260px; font-weight: 800; letter-spacing: -.03em; line-height: 1; font-variant-numeric: tabular-nums; }
+  .idlescreen .date { font-size: 46px; color: var(--dim); margin-top: 14px; }
+  .idlescreen .none { margin-top: 40px; font-size: 40px; font-weight: 700; letter-spacing: .3em; text-transform: uppercase;
+                color: var(--faint); }
+  .strip { display: grid; grid-template-columns: repeat(5, 1fr); gap: 18px; }
+  .card { background: var(--panel); border-radius: 16px; padding: 24px 26px; display: flex; flex-direction: column; gap: 10px;
+          border-top: 6px solid var(--line); }
+  .card.idle-ok { border-top-color: var(--green); }
+  .card.offline { opacity: .55; }
+  .card .n { font-size: 34px; font-weight: 800; }
+  .card .s { font-size: 20px; letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
+  .card .f { display: flex; align-items: center; gap: 12px; font-size: 22px; color: var(--dim); white-space: nowrap;
+             overflow: hidden; }
+  .card .f .dot { width: 20px; height: 20px; }
+  .card .l { font-size: 19px; color: var(--faint); }
+
+  /* ---------- demo bar ---------- */
+  #dbg { position: fixed; left: 0; right: 0; bottom: 0; z-index: 60; padding: 6px 10px; background: #ff0; color: #000;
+         font: 600 16px system-ui, sans-serif; }
+  #demo { position: fixed; left: 50%; top: 16px; transform: translateX(-50%); z-index: 50; display: flex; gap: 6px; align-items: center;
+          padding: 8px 10px; border-radius: 12px; background: rgba(20,24,29,.92); border: 1px solid var(--line);
+          font: 600 14px system-ui, sans-serif; color: var(--dim); transition: opacity .4s; cursor: default; }
+  #demo button { font: inherit; color: var(--text); background: var(--panel-2); border: 1px solid var(--line);
+                 border-radius: 8px; padding: 6px 11px; cursor: pointer; }
+  #demo button.on { background: var(--blue); border-color: var(--blue); color: #001; }
+  #demo.hide { opacity: 0; pointer-events: none; }
+  #demo .sep { width: 1px; height: 22px; background: var(--line); margin: 0 4px; }
+
+  /* old browsers without flexbox gap (LG webOS): same spacing with margins */
+  .nogap .row1 > * + * { margin-left: calc(var(--cw) * 2); }
+  .nogap .row2 > * + * { margin-left: calc(var(--cw) * 3); }
+  .nogap .row3 > * + *, .nogap .temps > * + * { margin-left: calc(var(--cw) * 2.4); }
+  .nogap .row2 > .layer, .nogap .row3 > .temps { margin-left: auto; }
+  .nogap .fil > * + * { margin-left: calc(var(--cw) * 1); }
+  .nogap .alert > * + * { margin-left: calc(var(--cw) * 1.6); }
+  .nogap .banner > * + * { margin-left: calc(var(--cw) * 2); }
+  .nogap .brand > * + *, .nogap .mini div > * + * { margin-left: calc(var(--cw) * 2.5); }
+  .nogap .idlescreen .brand > * + * { margin-left: 30px; }
+  .nogap .chip > * + * { margin-left: 14px; }
+  .nogap .tinfo > * + * { margin-top: calc(var(--cw) * 1.1); }
+  .nogap .card > * + * { margin-top: 10px; }
+  .nogap .card .f > * + * { margin-left: 12px; }
+  .nogap .pi::before { margin-right: 22%; }
+  .nogap #demo > * + * { margin-left: 6px; }
+</style>
+</head>
+<body>
+<div id="stage"></div>
+<div id="demo"></div>
+
+<script>
+/* ---------------- configuration ---------------- */
+// go2rtc on mtnears-srv1. Served from the display service, it's proxied at /go2rtc on the same
+// address (so the browser allows the video player); opened as a local file, it's reached directly.
+const GO2RTC = location.protocol.startsWith("http") ? location.origin + "/go2rtc" : "http://" + (new URLSearchParams(location.search).get("host") || "localhost") + ":1984";
+const STATUS_URL = "/status.json";   // written once a second by the overlay service (bambu-overlay)
+const KEEP_FINISHED_MIN = 15;                       // a finished job stays on screen this long
+// Live: replaced by the printer list in status.json (order and names from printers.yaml).
+// These five are only the demo's sample printers.
+const PRINTERS = [                                  // order = order on screen
+  { id: "dewey",     name: "Dewey",      model: "X1C", stream: "dewey_src" },
+  { id: "huey",      name: "Huey.v2",    model: "H2",  stream: "huey_src" },
+  { id: "louie",     name: "Louie",      model: "X1C", stream: "louie_src" },
+  { id: "gort",      name: "Gort",       model: "",    stream: null },        // camera off for now
+  { id: "irongiant", name: "Iron Giant", model: "H2",  stream: "irongiant_src" },
+];
+
+const params = new URLSearchParams(location.search);
+// Live data by default when served from the display service; ?demo=N shows the demo scenarios.
+const LIVE = location.protocol.startsWith("http") && !params.has("demo");
+const LAYOUT_ALL = params.get("layout") === "all";   // always show every printer (3x2 + clock)
+// TV browsers (Fire TV Silk, LG webOS, Samsung Tizen) can't play the H.264 player reliably:
+// they get motion JPEG in an <img> instead. ?video=mjpeg / ?video=h264 overrides.
+const TV_BROWSER = /Silk|AFT[A-Z]|Web0S|webOS|NetCast|Tizen|SMART-TV|SmartTV|BRAVIA|HbbTV/i.test(navigator.userAgent);
+// Fire TV (Silk) decodes at most two live H.264 streams: WebRTC for one or two camera tiles, MJPEG for more
+const SILK = /Silk|AFT[A-Z]/i.test(navigator.userAgent);
+const MJPEG = params.get("video") === "mjpeg" || (TV_BROWSER && !SILK && !params.has("video"));   // always MJPEG
+const SILK_AUTO = SILK && !params.has("video");
+const USE_VIDEO = params.get("video") !== "0" && !MJPEG;
+let curMjpeg = MJPEG;          // set per layout in renderInner()
+
+/* ---------------- demo scenarios ---------------- */
+// Times are in minutes. remaining = slicer minutes left; pause_in = minutes to the next slicer pause.
+const DEMO = {
+  0: { gort: { state: "offline" }, louie: { state: "idle", filament: "PLA Matte · Charcoal", color: "3a3a3a", last: 140 },
+       dewey: { state: "idle", filament: "PETG HF · White", color: "f2f2f2", last: 65 },
+       huey: { state: "idle", filament: "ASA · Black", color: "111111", last: 22 },
+       irongiant: { state: "idle", filament: "PLA Basic · Bambu Green", color: "00ae42", last: 300 } },
+  1: { huey: { state: "printing", job: "Working Equitation Bell Corral Set", profile: "0.20mm Standard",
+               percent: 41, layer: 118, layers: 286, remaining: 154, filament: "ASA · Black", color: "111111",
+               nozzle: 260, bed: 100, chamber: 52, nozzle_t: 260, bed_t: 100, chamber_t: 60, pause_in: 38, pause_note: "Insert the magnets", pause_at: 151, pause_frac: .58 } },
+  2: { huey: { state: "printing", job: "Bell Corral Set", percent: 41, layer: 118, layers: 286, remaining: 154,
+               filament: "ASA · Black", color: "111111", nozzle: 260, bed: 100, chamber: 52 },
+       irongiant: { state: "printing", job: "Starlink Mini Mount", percent: 73, layer: 201, layers: 274, remaining: 8,
+               filament: "PETG HF · Grey", color: "8a8d91", nozzle: 255, bed: 70, chamber: 38,
+               pause_in: 6, pause_note: "Insert the M5 nuts", pause_at: 212, pause_frac: .77 } },
+  3: { huey: { state: "printing", job: "Bell Corral Set", percent: 41, layer: 118, layers: 286, remaining: 154,
+               filament: "ASA · Black", color: "111111", nozzle: 260, bed: 100, chamber: 52 },
+       irongiant: { state: "paused", job: "Starlink Mini Mount", percent: 77, layer: 212, layers: 274, remaining: 41,
+               filament: "PETG HF · Grey", color: "8a8d91", nozzle: 255, bed: 70, chamber: 38,
+               pause_note: "Insert the M5 nuts", paused_for: 4 },
+       dewey: { state: "finished", job: "Trainer Clinic Name Tags", percent: 100, layer: 42, layers: 42,
+               filament: "PLA Matte · Charcoal", color: "3a3a3a", done_ago: 6 } },
+  4: { dewey: { state: "printing", job: "Pole Bend Markers ×12", percent: 18, layer: 31, layers: 180, remaining: 212,
+               filament: "PLA Basic · Red", color: "c8102e", nozzle: 220, bed: 55 },
+       huey: { state: "printing", job: "Bell Corral Set", percent: 41, layer: 118, layers: 286, remaining: 154,
+               filament: "ASA · Black", color: "111111", nozzle: 260, bed: 100, chamber: 52 },
+       louie: { state: "printing", job: "Unnamed job · plate 2", percent: 88, layer: 96, layers: 110, remaining: 14,
+               filament: "PLA Matte · Charcoal", color: "3a3a3a", nozzle: 220, bed: 60 },
+       irongiant: { state: "paused", job: "Starlink Mini Mount", percent: 77, layer: 212, layers: 274, remaining: 41,
+               filament: "PETG HF · Grey", color: "8a8d91", nozzle: 255, bed: 70, chamber: 38,
+               pause_note: "Insert the M5 nuts", paused_for: 4 } },
+  5: { dewey: { state: "printing", job: "Pole Bend Markers ×12", percent: 18, layer: 31, layers: 180, remaining: 212,
+               filament: "PLA Basic · Red", color: "c8102e", nozzle: 220, bed: 55 },
+       huey: { state: "printing", job: "Bell Corral Set", percent: 41, layer: 118, layers: 286, remaining: 154,
+               filament: "ASA · Black", color: "111111", nozzle: 260, bed: 100, chamber: 52,
+               pause_in: 38, pause_note: "Insert the magnets", pause_frac: .58 },
+       louie: { state: "printing", job: "Unnamed job · plate 2", percent: 88, layer: 96, layers: 110, remaining: 14,
+               filament: "PLA Matte · Charcoal", color: "3a3a3a", nozzle: 220, bed: 60 },
+       gort: { state: "printing", job: "Gate Latch Handles", percent: 55, layer: 60, layers: 109, remaining: 47,
+               filament: "PETG · Black", color: "111111", nozzle: 240, bed: 70 },
+       irongiant: { state: "finished", job: "Starlink Mini Mount", percent: 100, layer: 274, layers: 274,
+               filament: "PETG HF · Grey", color: "8a8d91", done_ago: 11 } },
+};
+let scenario = Math.max(0, Math.min(5, parseInt(params.get("demo") ?? "3", 10) || 0));
+
+/* ---------------- helpers ---------------- */
+const $ = (tag, cls, html) => { const e = document.createElement(tag); if (cls) e.className = cls; if (html != null) e.innerHTML = html; return e; };
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const fmtDur = m => { m = Math.max(0, Math.round(m)); const h = Math.floor(m / 60), r = m % 60; return h ? `${h}h ${String(r).padStart(2, "0")}m` : `${r} min`; };
+const fmtClock = d => d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+const etaText = m => { const d = new Date(Date.now() + m * 60000); const same = d.toDateString() === new Date().toDateString();
+  return "done " + fmtClock(d) + (same ? "" : " tomorrow"); };
+const pauseIcon = '<span class="pi"></span>';
+
+/* the printers that get a tile: printing, paused, or finished within KEEP_FINISHED_MIN */
+function activeList(status) {
+  if (LAYOUT_ALL) return PRINTERS.slice();
+  return PRINTERS.filter(p => { const s = status[p.id] || {};
+    return s.state === "printing" || s.state === "paused" ||
+      ((s.state === "finished" || s.state === "failed") && (s.done_ago ?? 0) <= KEEP_FINISHED_MIN); });
+}
+
+/* ---------------- camera elements (kept alive across re-renders) ---------------- */
+// One job full screen shows the printer's HUD stream (the gauges UniFi Protect gets); ?hud=0 turns it off
+const HUD_FULL = params.get("hud") !== "0";
+// HUD-style dials in the tiles instead of the big numbers
+const GAUGES = params.get("gauges") !== "0";     // default since 2026-11-02 (Ken); ?gauges=0 for big text
+// one dial: a 270-degree arc (value 0..1), big value, small line under it, label below
+function dial(frac, color, big, sub, label, tfrac) {
+  const f = Math.max(0, Math.min(1, frac || 0));
+  // target mark (like the HUD): a short white tick across the arc at the target value
+  let tick = "";
+  if (tfrac != null) {
+    const a = (135 + 270 * Math.max(0, Math.min(1, tfrac))) * Math.PI / 180;
+    const pt = r => `${(50 + r * Math.cos(a)).toFixed(1)} ${(50 + r * Math.sin(a)).toFixed(1)}`;
+    tick = `<path d="M${pt(34)} L${pt(49)}" stroke="#f2f4f7" stroke-width="3.5" stroke-linecap="round"/>`;
+  }
+  return `<div class="g"><svg viewBox="0 0 100 100">
+    <circle cx="50" cy="50" r="41" pathLength="100" fill="none" stroke="#2a313a" stroke-width="8" stroke-linecap="round"
+      stroke-dasharray="75 100" transform="rotate(135 50 50)"/>
+    <circle cx="50" cy="50" r="41" pathLength="100" fill="none" stroke="${color}" stroke-width="8" stroke-linecap="round"
+      stroke-dasharray="${(75 * f).toFixed(1)} 100" transform="rotate(135 50 50)"/>${tick}
+    <text x="50" y="${sub ? 52 : 58}" text-anchor="middle" font-size="${String(big).replace("°", "").length > 4 ? 19 : 25}" font-weight="800" fill="#f2f4f7">${big}</text>
+    ${sub ? `<text x="50" y="69" text-anchor="middle" font-size="11" fill="#9aa4b2">${sub}</text>` : ""}
+  </svg><div class="gl">${label}</div></div>`;
+}
+function gaugeRow(s, compact) {
+  const lf = s.layers ? s.layer / s.layers : (s.percent || 0) / 100;
+  const rem = s.remaining != null ? (s.remaining >= 60 ? Math.floor(s.remaining / 60) + "h" + String(s.remaining % 60).padStart(2, "0") : s.remaining + "m") : "–";
+  const done = s.remaining != null && s.state === "printing" ? fmtClock(new Date(Date.now() + s.remaining * 60000)).replace(/\s?[AP]M$/i, "") : "";
+  const t = (v, max) => v == null ? 0 : v / max;
+  const deg = v => v == null ? "–" : v + "°";
+  let g = dial(lf, "#3ddc84", (s.percent ?? 0) + "%", s.layers ? `${s.layer}/${s.layers}` : "", "Layer") +
+          dial((s.percent || 0) / 100, "#2ec4b6", rem, done ? "done " + done : "", "Remaining") +
+          // temperatures: "270°" big, "target 270°" under it, unit in the label (no target = no heater, e.g. X1C chamber)
+          dial(t(s.nozzle, 300), "#ff7a3d", deg(s.nozzle), s.nozzle_t ? "target " + s.nozzle_t + "°" : "", "Nozzle °C", s.nozzle_t ? s.nozzle_t / 300 : null) +
+          dial(t(s.bed, 120), "#ffb020", deg(s.bed), s.bed_t ? "target " + s.bed_t + "°" : "", "Bed °C", s.bed_t ? s.bed_t / 120 : null);
+  if (s.chamber != null) g += dial(t(s.chamber, 80), "#4aa8ff", deg(s.chamber), s.chamber_t ? "target " + s.chamber_t + "°" : "", "Chamber °C", s.chamber_t ? s.chamber_t / 80 : null);
+  return g;
+}
+const cams = {};
+function camEl(p, hud) {
+  const key = p.id + (hud ? ":hud" : "") + (curMjpeg ? ":mj" : "");
+  if (cams[key]) return cams[key];
+  const box = $("div", "cam" + (hud ? " hud" : ""));
+  const base = p.stream ? p.stream.replace(/_src$/, "") : null;          // e.g. "huey"
+  const h264 = hud ? base : p.stream;                                    // huey (HUD) or huey_src (camera)
+  const mjpeg = hud ? base + "_hudmjpeg" : base + "_mjpeg";
+  if (!p.stream) {
+    box.appendChild($("div", "nocam", "Camera off"));
+  } else if (curMjpeg) {
+    const img = $("img"); img.alt = "";
+    const load = () => { if (!box._dead) img.src = `${GO2RTC}/api/stream.mjpeg?src=${encodeURIComponent(mjpeg)}&t=${Date.now()}`; };
+    img.onerror = () => setTimeout(load, 5000);          // reconnect if the stream drops
+    load();
+    box.appendChild(img);
+  } else if (USE_VIDEO && window.customElements && customElements.get("video-stream")) {
+    const v = document.createElement("video-stream");
+    v.mode = params.get("vmode") || "webrtc";              // WebRTC: MSE stalls in Edge with these streams (2026-11-02); ?vmode=mse to compare
+    v.background = true;
+    v.src = `${GO2RTC}/api/ws?src=${encodeURIComponent(h264)}`;
+    box.appendChild(v);
+    // go2rtc's player turns on browser controls; keep the picture clean
+    const tidy = () => { const vid = v.querySelector("video"); if (vid) { vid.controls = false; vid.muted = true; vid.style.objectFit = hud ? "contain" : "cover"; } };
+    new MutationObserver(tidy).observe(v, { childList: true, subtree: true, attributes: true });
+    setInterval(tidy, 2000);
+  } else {
+    const img = $("img"); img.alt = "";
+    const load = () => { if (!box._dead) img.src = `${GO2RTC}/api/frame.jpeg?src=${encodeURIComponent(h264)}&t=${Date.now()}`; };
+    img.onerror = () => { box.classList.add("err"); };
+    load(); setInterval(load, 4000);
+    box.appendChild(img);
+  }
+  return (cams[key] = box);
+}
+
+/* ---------------- tile ---------------- */
+function tile(p, s, opts = {}) {
+  const t = $("div", "tile");
+  t.dataset.id = p.id;
+  t.appendChild(camEl(p, opts.hud));
+  fillTile(t, p, s, opts);
+  return t;
+}
+
+/* (re)draw a tile's banner and text; the camera element is left alone */
+function fillTile(t, p, s, opts = {}) {
+  t.className = "tile " + s.state + (opts.overlay ? " overlay" : "") + (opts.hud ? " hudtile" : "");
+  t._opts = opts;
+  const cam = t.querySelector(".cam");
+  t.querySelectorAll(":scope > .tinfo").forEach(e => e.remove());
+  if (opts.hud) { [...cam.querySelectorAll(".banner")].forEach(b => b.remove()); return; }   // the HUD draws its own
+
+  // banner across the top of the camera for paused / finished
+  [...cam.querySelectorAll(".banner")].forEach(b => b.remove());
+  if (s.state === "paused") {
+    cam.appendChild($("div", "banner", `${pauseIcon}<span>PAUSED</span>` +
+      (s.pause_note ? `<span class="msg">· ${esc(s.pause_note)}</span>` : "")));
+  } else if (s.state === "finished") {
+    cam.appendChild($("div", "banner done", `<span>✓ DONE</span><span class="msg">· ${s.done_ago} min ago${opts.compact ? "" : " — clear the plate"}</span>`));
+  } else if (s.state === "failed") {
+    cam.appendChild($("div", "banner fail", `<span>✕ FAILED</span><span class="msg">· ${s.done_ago} min ago${opts.compact ? "" : " — check the printer"}</span>`));
+  }
+
+  const info = $("div", "tinfo");
+  if (s.state === "idle" || s.state === "offline" || !s.state) {
+    const off = s.state !== "idle";
+    t.classList.add("quiet");
+    info.appendChild($("div", "row1", `<span class="pname">${esc(p.name)}</span><span class="state" style="color:var(${off ? "--faint" : "--green"})">${off ? "Offline" : "Ready"}</span>`));
+    info.appendChild($("div", "row3", off ? "&nbsp;" : `<span class="fil"><span class="dot" style="background:#${s.color || "555"}"></span>${esc(s.filament || "No filament")}</span>` +
+      (s.last != null ? `<span class="temps">Last job ${fmtDur(s.last)} ago</span>` : "")));
+    t.appendChild(info);
+    return;
+  }
+  const stateWord = { printing: s.stage || "Printing", paused: s.paused_for != null ? `Paused ${s.paused_for} min` : "Paused",
+                      finished: "Finished", failed: "Failed" }[s.state];
+  info.appendChild($("div", "row1", `<span class="pname">${esc(p.name)}</span><span class="state">${stateWord}</span>
+     <span class="job">${esc(s.job || "")}</span>`));
+
+  const pct = Math.max(0, Math.min(100, s.percent ?? 0));
+  const marker = s.pause_frac != null && s.state === "printing" ? `<b style="left:${(s.pause_frac * 100).toFixed(1)}%"></b>` : "";
+  info.appendChild($("div", "bar", `<i style="width:${pct}%"></i>${marker}`));
+
+  let row2;
+  const useG = GAUGES && (s.state === "printing" || s.state === "paused");
+  if (useG) {
+    // a pause countdown below the dials: smaller dials so both fit in a small tile
+    info.appendChild($("div", "gauges" + (s.state === "printing" && s.pause_in != null && opts.compact ? " tight" : ""), gaugeRow(s, opts.compact)));
+  } else if (s.state === "finished" || s.state === "failed") {
+    row2 = `<span class="pct">${s.state === "finished" ? 100 : pct}%</span><span class="eta">${s.state} ${fmtClock(new Date(Date.now() - s.done_ago * 60000))}</span>`;
+  } else {
+    row2 = `<span class="pct">${pct}%</span>` + (s.remaining != null ? `<span class="rem">${fmtDur(s.remaining)} left</span>` +
+           (s.state === "printing" ? `<span class="eta">${etaText(s.remaining)}</span>` : "") : "");
+  }
+  if (!useG) {
+    if (s.layers && !opts.compact) row2 += `<span class="layer">layer ${s.layer} / ${s.layers}</span>`;
+    info.appendChild($("div", "row2", row2));
+  }
+
+  if (s.state === "printing" && s.pause_in != null) {
+    info.appendChild($("div", "alert", `${pauseIcon}<span>Pause in ${fmtDur(s.pause_in)}</span>` +
+      (s.pause_note ? `<span class="msg">${esc(s.pause_note)}</span>` : "")));
+  }
+
+  if (!opts.compact && !useG) {
+    const temps = (s.state === "finished" || s.state === "failed") ? "" :
+      `<span class="temps"><span>Nozzle <b>${s.nozzle ?? "–"}°</b></span><span>Bed <b>${s.bed ?? "–"}°</b></span>` +
+      (s.chamber != null ? `<span>Chamber <b>${s.chamber}°</b></span>` : "") + `</span>`;
+    info.appendChild($("div", "row3", `<span class="fil"><span class="dot" style="background:#${s.color || "555"}"></span>${esc(s.filament || "")}</span>${temps}`));
+  }
+  t.appendChild(info);
+}
+
+/* ---------------- clock panel & idle ---------------- */
+const now = () => new Date();
+const dateText = d => d.toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" });
+// Branding: printers.yaml site_label (a trailing .com/.net/.org is dropped), e.g. "MTNEARZ.COM" -> "MTNEARZ"
+let SITE = "";                                         // until status.json arrives (demo: "Print shop")
+const siteWord = () => (SITE || "Print shop").replace(/\.(com|net|org)$/i, "");
+const brandHTML = () => `<div class="brand"><div class="mark">${esc(siteWord().charAt(0).toUpperCase())}</div><div><div class="word">${esc(siteWord())}</div><div class="sub">Print shop</div></div></div>`;
+
+function clockPanel(status) {
+  const c = $("div", "clockpanel");
+  if (LAYOUT_ALL) {
+    const cnt = {}; PRINTERS.forEach(p => { const st = (status[p.id] || {}).state || "offline"; cnt[st] = (cnt[st] || 0) + 1; });
+    const lines = [["printing", "Printing", "--blue"], ["paused", "Paused", "--amber"], ["finished", "Done", "--green"], ["idle", "Ready", "--dim"], ["offline", "Offline", "--faint"]]
+      .filter(([k]) => cnt[k]).map(([k, l, c]) => `<div><b style="color:var(${c})">${cnt[k]}</b><span>${l}</span></div>`).join("");
+    c.innerHTML = brandHTML() + `<div><div class="bigtime" data-clock>${fmtClock(now())}</div><div class="bigdate" data-date>${dateText(now())}</div></div><div class="mini">${lines}</div>`;
+    return c;
+  }
+  const others = PRINTERS.filter(p => !activeList(status).includes(p));
+  c.innerHTML = brandHTML() +
+    `<div><div class="bigtime" data-clock>${fmtClock(now())}</div><div class="bigdate" data-date>${dateText(now())}</div></div>` +
+    `<div class="mini">${others.map(p => { const s = status[p.id] || { state: "offline" };
+        return `<div><b>${esc(p.name)}</b><span class="dot" style="background:#${s.color || "333"}"></span><span class="st">${s.state === "offline" ? "Offline" : "Idle"}</span></div>`; }).join("")
+      || `<div>All printers busy</div>`}</div>`;
+  return c;
+}
+
+// Screensaver drift on the idle screen: no fixed pixels for hours (CSS variables on #stage, so a redraw keeps the spot)
+function drift() {
+  const st = document.getElementById("stage"), r = (a) => Math.round((Math.random() * 2 - 1) * a) + "px";
+  st.style.setProperty("--cx", r(420)); st.style.setProperty("--cy", r(45));
+  st.style.setProperty("--sx", r(50)); st.style.setProperty("--sy", r(28));
+}
+setInterval(drift, 40000);
+const stripHTML = status => PRINTERS.map(p => { const s = status[p.id] || { state: "offline" };
+      const off = s.state === "offline";
+      return `<div class="card ${off ? "offline" : "idle-ok"}"><div class="n">${esc(p.name)}</div>
+        <div class="s">${off ? "Offline" : "Ready"}</div>
+        <div class="f">${off ? "—" : `<span class="dot" style="background:#${s.color || "555"}"></span>${esc(s.filament || "No filament")}`}</div>
+        <div class="l">${s.last != null ? "Last job " + fmtDur(s.last) + " ago" : "&nbsp;"}</div></div>`; }).join("");
+
+function idleScreen(status) {
+  const w = $("div", "idlescreen");
+  w.innerHTML = `<div class="top">${brandHTML()}<div></div></div>
+    <div class="center"><div class="time" data-clock>${fmtClock(now())}</div><div class="date" data-date>${dateText(now())}</div>
+      <div class="none">No jobs running</div></div>
+    <div class="strip">${stripHTML(status)}</div>`;
+  return w;
+}
+
+/* ---------------- layouts ---------------- */
+// --cw / --ch = 1% of a tile's width / height (stand-in for CSS container units)
+function sizeVars() {
+  document.querySelectorAll(".tile, .clockpanel").forEach(e => {
+    e.style.setProperty("--cw", (e.offsetWidth / 100) + "px");
+    e.style.setProperty("--ch", (e.offsetHeight / 100) + "px");
+  });
+}
+(function () {   // flexbox gap support test
+  const d = document.createElement("div");
+  d.style.cssText = "display:flex;flex-direction:column;row-gap:1px;position:absolute";
+  d.appendChild(document.createElement("div")); d.appendChild(document.createElement("div"));
+  document.documentElement.appendChild(d);
+  if (d.scrollHeight !== 1) document.documentElement.classList.add("nogap");
+  d.remove();
+})();
+let lastSig = "";
+function render(status) {
+  renderInner(status); sizeVars();
+  // stop camera streams no longer on screen (a detached MJPEG <img> keeps downloading)
+  Object.keys(cams).forEach(k => { const c = cams[k]; if (!document.body.contains(c)) {
+    c._dead = true; c.querySelectorAll("img").forEach(i => { i.removeAttribute("src"); }); delete cams[k]; } });
+}
+function renderInner(status) {
+  const stage = document.getElementById("stage");
+  const act0 = activeList(status);
+  const sig = act0.map(p => p.id).join(",") + "|" + LAYOUT_ALL;
+  if (sig === lastSig && !act0.length) {
+    const strip = stage.querySelector(".idlescreen .strip");
+    if (strip) { strip.innerHTML = stripHTML(status); return; }
+  }
+  if (sig === lastSig && act0.length) {
+    // same printers on screen: refresh the text only, so the video keeps playing
+    stage.querySelectorAll(".tile").forEach(t => { const p = PRINTERS.find(x => x.id === t.dataset.id);
+      if (p) fillTile(t, p, status[p.id] || { state: "offline" }, t._opts); });
+    const cp = stage.querySelector(".clockpanel"); if (cp) cp.replaceWith(clockPanel(status));
+    return;
+  }
+  lastSig = sig;
+  // detach cameras first so live video elements survive the re-render
+  Object.values(cams).forEach(c => c.remove());
+  stage.innerHTML = "";
+  const act = activeList(status);
+  if (SILK_AUTO) curMjpeg = act.filter(p => p.stream).length > 2;
+  const n = act.length;
+  const tileFor = (p, o) => tile(p, status[p.id], o);
+
+  if (n === 0) { stage.appendChild(idleScreen(status)); return; }
+  if (LAYOUT_ALL) { const g = $("div", "grid"); stage.appendChild(g);
+    g.style.gridTemplateColumns = "repeat(3, 1fr)"; g.style.gridTemplateRows = "1fr 1fr";
+    act.forEach(p => g.appendChild(tileFor(p, { compact: true })));
+    g.appendChild(clockPanel(status)); return; }
+
+  const g = $("div", "grid");
+  stage.appendChild(g);
+  const add = (el, area) => { if (area) el.style.gridArea = area; g.appendChild(el); };
+
+  if (n === 1) {
+    g.style.padding = "0"; g.style.gap = "0";
+    add(tileFor(act[0], { overlay: true, hud: HUD_FULL && !!act[0].stream && status[act[0].id].state !== "finished" && status[act[0].id].state !== "failed" }));
+  } else if (n === 2) {
+    g.style.gridTemplateColumns = "1fr 1fr";
+    act.forEach(p => add(tileFor(p)));
+  } else if (n === 3) {
+    g.style.gridTemplateColumns = "1272px 1fr";
+    g.style.gridTemplateRows = "1fr 1fr";
+    add(tileFor(act[0]), "1 / 1 / 3 / 2");
+    add(tileFor(act[1], { compact: true }), "1 / 2 / 2 / 3");
+    add(tileFor(act[2], { compact: true }), "2 / 2 / 3 / 3");
+  } else if (n === 4) {
+    g.style.gridTemplateColumns = "1fr 1fr"; g.style.gridTemplateRows = "1fr 1fr";
+    act.forEach(p => add(tileFor(p, { overlay: true })));
+  } else {
+    g.style.gridTemplateColumns = "repeat(3, 1fr)"; g.style.gridTemplateRows = "1fr 1fr";
+    act.forEach(p => add(tileFor(p, { compact: true })));
+    add(clockPanel(status));
+  }
+  stage.querySelectorAll(".tile").forEach(t => {
+    if (t.offsetLeft + t.offsetWidth > 1900 && t.offsetTop < 20) t.dataset.chip = "1"; });
+  if (n >= 1 && n <= 4 && !stage.querySelector(".hudtile")) stage.appendChild($("div", "chip", `<span data-clock>${fmtClock(now())}</span><small>${esc(siteWord())}</small>`));
+}
+
+/* ---------------- status source ---------------- */
+let status = {};
+async function refresh() {
+  if (LIVE) {
+    try {
+      const r = await fetch(STATUS_URL, { cache: "no-store" });
+      const doc = await r.json();
+      const next = {};
+      const list = (doc.printers || []).map(x => {
+        const id = String(x.name).toLowerCase();
+        next[id] = x;
+        return { id, name: x.display || x.name, stream: x.camera === false ? null : id + "_src" };
+      });
+      const key = l => l.map(q => q.id + "|" + q.name + "|" + q.stream).join(",");
+      if (key(list) !== key(PRINTERS)) { PRINTERS.length = 0; list.forEach(q => PRINTERS.push(q)); lastSig = ""; }
+      if (doc.site_label != null) SITE = doc.site_label;
+      // the overlay writes every second; a feed older than a minute means it has stopped
+      const age = (Date.now() - Date.parse(doc.updated)) / 1000;
+      document.body.classList.toggle("stale", !(age < 60));
+      status = next;
+    } catch (e) { document.body.classList.add("stale"); }
+  } else {
+    status = JSON.parse(JSON.stringify(DEMO[scenario]));
+    PRINTERS.forEach(p => { if (!status[p.id]) status[p.id] = p.id === "gort" ? { state: "offline" } :
+      { state: "idle", filament: "PLA Basic · White", color: "eeeeee" }; });
+  }
+  render(status);
+}
+
+/* ---------------- clock tick, scaling, demo bar ---------------- */
+setInterval(() => {
+  document.querySelectorAll("[data-clock]").forEach(e => e.textContent = fmtClock(now()));
+  document.querySelectorAll("[data-date]").forEach(e => e.textContent = dateText(now()));
+}, 5000);
+
+// Scale the 1920x1080 stage to the area the browser actually shows. TV browsers (Silk) can
+// report a window larger than what's visible, so prefer the visual viewport and re-check
+// every 2 s (hiding the toolbar doesn't always fire a resize).
+const DEBUG = params.get("debug") === "1";
+function viewSize() {
+  const vv = window.visualViewport;
+  const de = document.documentElement;
+  const w = Math.min(...[vv && vv.width, de.clientWidth, innerWidth].filter(x => x > 0));
+  const h = Math.min(...[vv && vv.height, de.clientHeight, innerHeight].filter(x => x > 0));
+  return { w, h, vv, de };
+}
+let lastFit = "";
+function fit() {
+  const { w, h, vv, de } = viewSize();
+  const s = Math.min(w / 1920, h / 1080);
+  const key = w + "x" + h;
+  if (key !== lastFit) {
+    lastFit = key;
+    const st = document.getElementById("stage");
+    st.style.transform = `scale(${s})`;
+    st.style.left = ((w - 1920 * s) / 2) + "px";
+    st.style.top = ((h - 1080 * s) / 2) + "px";
+  }
+  if (DEBUG) {
+    let d = document.getElementById("dbg");
+    if (!d) { d = document.createElement("div"); d.id = "dbg"; document.body.appendChild(d); }
+    d.textContent = `inner ${innerWidth}x${innerHeight} · client ${de.clientWidth}x${de.clientHeight} · ` +
+      `visual ${vv ? Math.round(vv.width) + "x" + Math.round(vv.height) : "n/a"} · screen ${screen.width}x${screen.height} · ` +
+      `dpr ${devicePixelRatio} · using ${w}x${h} scale ${s.toFixed(3)} · cq ${CSS.supports("width: 1cqw") ? "yes" : "no"} · gap ${document.documentElement.classList.contains("nogap") ? "NO" : "yes"} · ${(navigator.userAgent.match(/Chrome\/[\d.]+/) || ["?"])[0]}`;
+  }
+}
+addEventListener("resize", fit);
+if (window.visualViewport) visualViewport.addEventListener("resize", fit);
+setInterval(fit, 2000);
+
+function demoBar() {
+  const bar = document.getElementById("demo");
+  if (LIVE) { bar.remove(); return; }
+  const labels = ["Idle", "1 job", "2 jobs", "3 jobs", "4 jobs", "5 jobs"];
+  bar.innerHTML = `<span>Demo</span><span class="sep"></span>` +
+    labels.map((l, i) => `<button data-s="${i}" class="${i === scenario ? "on" : ""}">${l}</button>`).join("") +
+    `<span class="sep"></span><button data-mode class="${LAYOUT_ALL ? "on" : ""}">All printers</button><button data-full>Full screen</button>`;
+  bar.onclick = e => {
+    const b = e.target.closest("button"); if (!b) return;
+    if (b.dataset.full != null) { document.documentElement.requestFullscreen?.(); return; }
+    if (b.dataset.mode != null) { const u = new URL(location.href); LAYOUT_ALL ? u.searchParams.delete("layout") : u.searchParams.set("layout", "all"); location.href = u; return; }
+    setScenario(+b.dataset.s);
+  };
+  let timer; const wake = () => { bar.classList.remove("hide"); document.body.classList.add("show-cursor");
+    clearTimeout(timer); timer = setTimeout(() => { bar.classList.add("hide"); document.body.classList.remove("show-cursor"); }, 4000); };
+  addEventListener("mousemove", wake); wake();
+}
+function setScenario(i) {
+  scenario = i;
+  document.querySelectorAll("#demo button[data-s]").forEach(b => b.classList.toggle("on", +b.dataset.s === i));
+  const u = new URL(location.href); u.searchParams.set("demo", i); history.replaceState(null, "", u);
+  refresh();
+}
+addEventListener("keydown", e => {
+  if (e.key >= "0" && e.key <= "5") setScenario(+e.key);
+  if (e.key === "d" || e.key === "D") document.getElementById("demo").classList.toggle("hide");
+});
+
+// Full screen on the first remote button press or click: browsers only allow it after user
+// input. On Silk (Fire TV) this hides the toolbar.
+function goFull() {
+  const de = document.documentElement;
+  if (document.fullscreenElement || document.webkitFullscreenElement) return;
+  (de.requestFullscreen || de.webkitRequestFullscreen || (() => {})).call(de);
+}
+addEventListener("keydown", goFull);
+addEventListener("click", e => { if (!e.target.closest("#demo")) goFull(); });
+
+/* ---------------- start ---------------- */
+async function start() {
+  fit(); demoBar();
+  if (USE_VIDEO) {
+    // go2rtc's own player component; falls back to still frames if srv1 can't be reached
+    await import(`${GO2RTC}/video-stream.js`).catch(() => console.warn("go2rtc player not reachable; using still frames"));
+  }
+  refresh();
+  setInterval(refresh, LIVE ? 3000 : 30000);
+  if (LIVE) setTimeout(() => location.reload(), 6 * 3600 * 1000);   // fresh start every few hours on the TV
+}
+start();
+</script>
+</body>
+</html>
