@@ -749,6 +749,9 @@ def printer_status(name: str, now: float) -> dict:
         "nozzle": round(view["nozzle"]) if view["nozzle"] is not None else None,
         "bed": round(view["bed"]) if view["bed"] is not None else None,
         "chamber": round(view["chamber"]) if view["chamber"] is not None else None,
+        "nozzle_t": round(view["nozzle_t"]) if view.get("nozzle_t") else None,
+        "bed_t": round(view["bed_t"]) if view.get("bed_t") else None,
+        "chamber_t": round(view["chamber_t"]) if view.get("chamber_t") else None,
     })
     if st in ("finished", "failed"):
         out["done_ago"] = round((now - m["finished_at"]) / 60) if m["finished_at"] else 9999
