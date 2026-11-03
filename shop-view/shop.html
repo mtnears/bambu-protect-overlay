@@ -416,7 +416,8 @@ function frameSig(img) {
     return h;
   } catch (e) { return null; }
 }
-function restartCam(box) {
+window.__restarts = [];                                   // console: __restarts (time, camera, reason)
+function restartCam(box, why) {
   if (Date.now() - (restartAt[box._key] || 0) < 60000) return;     // rate limit
   const hour = (restartLog[box._key] || []).filter(t => Date.now() - t < 3600000);
   if (hour.length >= 10) return;                                     // backstop: 10 per camera per hour
@@ -426,18 +427,33 @@ function restartCam(box) {
   box.querySelectorAll(".banner").forEach(b => nb.appendChild(b));
   box.replaceWith(nb);
   killCam(box);
-  console.warn("camera restarted:", box._key);
+  window.__restarts.push([new Date().toLocaleTimeString(), box._key, why || ""]);
+  if (window.__restarts.length > 200) window.__restarts.shift();
+  console.warn("camera restarted:", box._key, why || "");
 }
+// Only while the page is visible: a hidden tab pauses its video, which isn't a stall
+// (2026-11-03: an Edge tab in the background was "restarted" every minute).
+document.addEventListener("visibilitychange", () => {
+  document.querySelectorAll("#stage .cam").forEach(b => { b._same = 0; b._sig = undefined; });
+});
 setInterval(() => {
+  if (document.hidden) return;
   document.querySelectorAll("#stage .cam").forEach(box => {
     if (!box._p || !box._p.stream) return;
-    const vid = box.querySelector("video");
+    const vs = box.querySelector("video-stream");
+    const vid = (vs && vs.video) || box.querySelector("video");     // the player's active video element
     const img = box.querySelector("img");
     let sig = null, limit = 2;
-    if (vid) sig = vid.readyState >= 2 ? Math.round(vid.currentTime * 10) : "nodata";
+    if (vs && vs.pc && /failed|closed/.test(vs.pc.connectionState || "")) { restartCam(box, "webrtc " + vs.pc.connectionState); return; }
+    if (vid) {
+      // decoded frames when the browser reports them, otherwise the playback clock
+      const q = vid.getVideoPlaybackQuality ? vid.getVideoPlaybackQuality().totalVideoFrames : null;
+      sig = vid.readyState >= 2 ? (q || Math.round(vid.currentTime * 10)) : "nodata";
+      limit = sig === "nodata" ? 3 : 2;
+    }
     else if (img && /stream\.mjpeg/.test(img.src || "")) {
       box._born = box._born || Date.now();
-      if (Date.now() - box._born > 20 * 60000 + (box._key.length % 5) * 60000) { restartCam(box); return; }   // renew
+      if (Date.now() - box._born > 20 * 60000 + (box._key.length % 5) * 60000) { restartCam(box, "mjpeg renew"); return; }
       sig = img.naturalWidth ? "ok" : "nodata"; limit = 3;
       if (sig === "ok") { box._same = 0; box._sig = sig; return; }
     }
@@ -445,7 +461,7 @@ setInterval(() => {
     if (sig === null) return;
     box._same = (sig === box._sig) ? (box._same || 0) + 1 : 0;
     box._sig = sig;
-    if (box._same >= limit) restartCam(box);
+    if (box._same >= limit) restartCam(box, sig === "nodata" ? "no picture" : "stalled");
   });
 }, 10000);
 
