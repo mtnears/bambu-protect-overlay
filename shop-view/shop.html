@@ -394,7 +394,19 @@ function camEl(p, hud) {
 // 20 min (staggered). A still picture is NOT treated as stalled: a dark idle printer really doesn't
 // change (2026-11-03: that check restarted healthy MJPEG tiles until Silk ran out of memory).
 // At most one restart per camera per minute.
-const restartAt = {};
+const restartAt = {}, restartLog = {};
+// Shut a camera down for good. go2rtc's player only closes itself on removal when it isn't in
+// "background" mode (ours is), so detached players kept their WebRTC connections open; on the
+// Fire TV ~48 piled up in 2.5 h until Silk hung (2026-11-03).
+function killCam(box) {
+  box._dead = true;
+  box.querySelectorAll("img").forEach(i => i.removeAttribute("src"));
+  box.querySelectorAll("video-stream").forEach(v => {
+    try { v.background = false; } catch (e) {}
+    try { if (v.ondisconnect) v.ondisconnect(); } catch (e) {}
+  });
+  box.remove();
+}
 const probe = document.createElement("canvas"); probe.width = 32; probe.height = 18;
 function frameSig(img) {
   try {
@@ -406,11 +418,14 @@ function frameSig(img) {
 }
 function restartCam(box) {
   if (Date.now() - (restartAt[box._key] || 0) < 60000) return;     // rate limit
+  const hour = (restartLog[box._key] || []).filter(t => Date.now() - t < 3600000);
+  if (hour.length >= 10) return;                                     // backstop: 10 per camera per hour
+  restartLog[box._key] = hour.concat(Date.now());
   restartAt[box._key] = Date.now();
   const nb = (delete cams[box._key], camEl(box._p, box._hud));
   box.querySelectorAll(".banner").forEach(b => nb.appendChild(b));
-  box._dead = true; box.querySelectorAll("img").forEach(i => i.removeAttribute("src"));
   box.replaceWith(nb);
+  killCam(box);
   console.warn("camera restarted:", box._key);
 }
 setInterval(() => {
@@ -581,7 +596,7 @@ function render(status) {
   renderInner(status); sizeVars();
   // stop camera streams no longer on screen (a detached MJPEG <img> keeps downloading)
   Object.keys(cams).forEach(k => { const c = cams[k]; if (!document.body.contains(c)) {
-    c._dead = true; c.querySelectorAll("img").forEach(i => { i.removeAttribute("src"); }); delete cams[k]; } });
+    killCam(c); delete cams[k]; } });
 }
 function renderInner(status) {
   const stage = document.getElementById("stage");
@@ -761,7 +776,7 @@ async function start() {
   setInterval(refresh, LIVE ? 3000 : 30000);
   // every 3 h: fresh camera connections (a page reload would drop full screen on the Fire TV)
   if (LIVE) setInterval(() => {
-    Object.keys(cams).forEach(k => { const c = cams[k]; c._dead = true; c.querySelectorAll("img").forEach(i => i.removeAttribute("src")); delete cams[k]; });
+    Object.keys(cams).forEach(k => { killCam(cams[k]); delete cams[k]; });
     lastSig = ""; render(status);
   }, 3 * 3600 * 1000);
 }
