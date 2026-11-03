@@ -342,6 +342,16 @@ function gaugeRow(s, compact) {
   if (s.chamber != null) g += dial(t(s.chamber, 80), "#4aa8ff", deg(s.chamber), s.chamber_t ? "target " + s.chamber_t + "°" : "", "Chamber °C", s.chamber_t ? s.chamber_t / 80 : null);
   return g;
 }
+// go2rtc's player (video-rtc.js) crashes on video.play().catch(...) when WebRTC restarts its video
+// (seen in Edge, 2026-11-02): make play() always return a promise.
+(function () {
+  const play = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function () {
+    let r; try { r = play.apply(this, arguments); } catch (e) { r = Promise.reject(e); }
+    return r && typeof r.catch === "function" ? r : Promise.resolve();
+  };
+})();
+
 const cams = {};
 function camEl(p, hud) {
   const key = p.id + (hud ? ":hud" : "") + (curMjpeg ? ":mj" : "");
@@ -375,8 +385,43 @@ function camEl(p, hud) {
     load(); setInterval(load, 4000);
     box.appendChild(img);
   }
+  box._key = key; box._p = p; box._hud = hud;
   return (cams[key] = box);
 }
+
+// Watchdog: a <video> whose playback time hasn't moved for 20 s, or an MJPEG <img> whose picture
+// hasn't changed for 60 s (or is empty), gets a fresh camera element, like a page refresh would.
+const probe = document.createElement("canvas"); probe.width = 32; probe.height = 18;
+function frameSig(img) {
+  try {
+    const c = probe.getContext("2d"); c.drawImage(img, 0, 0, 32, 18);
+    const d = c.getImageData(0, 0, 32, 18).data; let h = 0;
+    for (let i = 0; i < d.length; i += 4) h = (h * 31 + d[i] + d[i + 1] * 3 + d[i + 2] * 7) | 0;
+    return h;
+  } catch (e) { return null; }
+}
+function restartCam(box) {
+  const nb = (delete cams[box._key], camEl(box._p, box._hud));
+  box.querySelectorAll(".banner").forEach(b => nb.appendChild(b));
+  box._dead = true; box.querySelectorAll("img").forEach(i => i.removeAttribute("src"));
+  box.replaceWith(nb);
+  console.warn("camera restarted:", box._key);
+}
+setInterval(() => {
+  document.querySelectorAll("#stage .cam").forEach(box => {
+    if (!box._p || !box._p.stream) return;
+    const vid = box.querySelector("video");
+    const img = box.querySelector("img");
+    let sig = null, limit = 2;
+    if (vid) sig = vid.readyState >= 2 ? Math.round(vid.currentTime * 10) : "nodata";
+    else if (img && /stream\.mjpeg/.test(img.src || "")) { sig = img.naturalWidth ? frameSig(img) : "nodata"; limit = 6; }
+    else return;                                            // still frames reload themselves
+    if (sig === null) return;
+    box._same = (sig === box._sig) ? (box._same || 0) + 1 : 0;
+    box._sig = sig;
+    if (box._same >= limit) restartCam(box);
+  });
+}, 10000);
 
 /* ---------------- tile ---------------- */
 function tile(p, s, opts = {}) {
