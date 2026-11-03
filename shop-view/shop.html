@@ -389,8 +389,12 @@ function camEl(p, hud) {
   return (cams[key] = box);
 }
 
-// Watchdog: a <video> whose playback time hasn't moved for 20 s, or an MJPEG <img> whose picture
-// hasn't changed for 60 s (or is empty), gets a fresh camera element, like a page refresh would.
+// Watchdog: a <video> whose playback time hasn't moved for 20 s, or an MJPEG <img> with no picture
+// for 30 s, gets a fresh camera element, like a page refresh would. MJPEG tiles are also renewed every
+// 20 min (staggered). A still picture is NOT treated as stalled: a dark idle printer really doesn't
+// change (2026-11-03: that check restarted healthy MJPEG tiles until Silk ran out of memory).
+// At most one restart per camera per minute.
+const restartAt = {};
 const probe = document.createElement("canvas"); probe.width = 32; probe.height = 18;
 function frameSig(img) {
   try {
@@ -401,6 +405,8 @@ function frameSig(img) {
   } catch (e) { return null; }
 }
 function restartCam(box) {
+  if (Date.now() - (restartAt[box._key] || 0) < 60000) return;     // rate limit
+  restartAt[box._key] = Date.now();
   const nb = (delete cams[box._key], camEl(box._p, box._hud));
   box.querySelectorAll(".banner").forEach(b => nb.appendChild(b));
   box._dead = true; box.querySelectorAll("img").forEach(i => i.removeAttribute("src"));
@@ -414,7 +420,12 @@ setInterval(() => {
     const img = box.querySelector("img");
     let sig = null, limit = 2;
     if (vid) sig = vid.readyState >= 2 ? Math.round(vid.currentTime * 10) : "nodata";
-    else if (img && /stream\.mjpeg/.test(img.src || "")) { sig = img.naturalWidth ? frameSig(img) : "nodata"; limit = 6; }
+    else if (img && /stream\.mjpeg/.test(img.src || "")) {
+      box._born = box._born || Date.now();
+      if (Date.now() - box._born > 20 * 60000 + (box._key.length % 5) * 60000) { restartCam(box); return; }   // renew
+      sig = img.naturalWidth ? "ok" : "nodata"; limit = 3;
+      if (sig === "ok") { box._same = 0; box._sig = sig; return; }
+    }
     else return;                                            // still frames reload themselves
     if (sig === null) return;
     box._same = (sig === box._sig) ? (box._same || 0) + 1 : 0;
@@ -748,7 +759,11 @@ async function start() {
   }
   refresh();
   setInterval(refresh, LIVE ? 3000 : 30000);
-  if (LIVE) setTimeout(() => location.reload(), 6 * 3600 * 1000);   // fresh start every few hours on the TV
+  // every 3 h: fresh camera connections (a page reload would drop full screen on the Fire TV)
+  if (LIVE) setInterval(() => {
+    Object.keys(cams).forEach(k => { const c = cams[k]; c._dead = true; c.querySelectorAll("img").forEach(i => i.removeAttribute("src")); delete cams[k]; });
+    lastSig = ""; render(status);
+  }, 3 * 3600 * 1000);
 }
 start();
 </script>
