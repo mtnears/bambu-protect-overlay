@@ -342,6 +342,16 @@ function gaugeRow(s, compact) {
   if (s.chamber != null) g += dial(t(s.chamber, 80), "#4aa8ff", deg(s.chamber), s.chamber_t ? "target " + s.chamber_t + "°" : "", "Chamber °C", s.chamber_t ? s.chamber_t / 80 : null);
   return g;
 }
+// go2rtc's player (video-rtc.js) crashes on video.play().catch(...) when WebRTC restarts its video
+// (seen in Edge, 2026-11-02): make play() always return a promise.
+(function () {
+  const play = HTMLMediaElement.prototype.play;
+  HTMLMediaElement.prototype.play = function () {
+    let r; try { r = play.apply(this, arguments); } catch (e) { r = Promise.reject(e); }
+    return r && typeof r.catch === "function" ? r : Promise.resolve();
+  };
+})();
+
 const cams = {};
 function camEl(p, hud) {
   const key = p.id + (hud ? ":hud" : "") + (curMjpeg ? ":mj" : "");
@@ -375,8 +385,98 @@ function camEl(p, hud) {
     load(); setInterval(load, 4000);
     box.appendChild(img);
   }
+  box._key = key; box._p = p; box._hud = hud;
   return (cams[key] = box);
 }
+
+// Watchdog: a <video> whose playback time hasn't moved for 20 s, or an MJPEG <img> with no picture
+// for 30 s, gets a fresh camera element, like a page refresh would. MJPEG tiles are also renewed every
+// 20 min (staggered). A still picture is NOT treated as stalled: a dark idle printer really doesn't
+// change (2026-11-03: that check restarted healthy MJPEG tiles until Silk ran out of memory).
+// At most one restart per camera per minute.
+const restartAt = {}, restartLog = {};
+// Shut a camera down for good. go2rtc's player only closes itself on removal when it isn't in
+// "background" mode (ours is), so detached players kept their WebRTC connections open; on the
+// Fire TV ~48 piled up in 2.5 h until Silk hung (2026-11-03).
+function killCam(box) {
+  box._dead = true;
+  box.querySelectorAll("img").forEach(i => i.removeAttribute("src"));
+  box.querySelectorAll("video-stream").forEach(v => {
+    try { v.background = false; } catch (e) {}
+    try { if (v.ondisconnect) v.ondisconnect(); } catch (e) {}
+  });
+  box.remove();
+}
+const probe = document.createElement("canvas"); probe.width = 32; probe.height = 18;
+function frameSig(img) {
+  try {
+    const c = probe.getContext("2d"); c.drawImage(img, 0, 0, 32, 18);
+    const d = c.getImageData(0, 0, 32, 18).data; let h = 0;
+    for (let i = 0; i < d.length; i += 4) h = (h * 31 + d[i] + d[i + 1] * 3 + d[i + 2] * 7) | 0;
+    return h;
+  } catch (e) { return null; }
+}
+window.__restarts = [];                                   // console: __restarts (time, camera, reason)
+function restartCam(box, why) {
+  if (Date.now() - (restartAt[box._key] || 0) < 60000) return;     // rate limit
+  const hour = (restartLog[box._key] || []).filter(t => Date.now() - t < 3600000);
+  if (hour.length >= 10) return;                                     // backstop: 10 per camera per hour
+  restartLog[box._key] = hour.concat(Date.now());
+  restartAt[box._key] = Date.now();
+  const nb = (delete cams[box._key], camEl(box._p, box._hud));
+  box.querySelectorAll(".banner").forEach(b => nb.appendChild(b));
+  box.replaceWith(nb);
+  killCam(box);
+  window.__restarts.push([new Date().toLocaleTimeString(), box._key, why || ""]);
+  if (window.__restarts.length > 200) window.__restarts.shift();
+  console.warn("camera restarted:", box._key, why || "");
+}
+// Only while the page is visible: a hidden tab pauses its video, which isn't a stall
+// (2026-11-03: an Edge tab in the background was "restarted" every minute).
+// After Edge has had its window covered or minimised, a WebRTC video can stay black (still decoded,
+// not drawn) until something forces a redraw; opening DevTools (a resize) fixed it (2026-11-03).
+// So: when the page comes back into view, and every 5 minutes, play every video and force a redraw.
+function nudgeVideos() {
+  document.querySelectorAll("#stage .cam video").forEach(v => {
+    try { if (v.paused) v.play(); } catch (e) {}
+    v.style.transform = "translateZ(0)";
+    requestAnimationFrame(() => requestAnimationFrame(() => { v.style.transform = ""; }));
+  });
+}
+document.addEventListener("visibilitychange", () => {
+  document.querySelectorAll("#stage .cam").forEach(b => { b._same = 0; b._sig = undefined; });
+  if (!document.hidden) { nudgeVideos(); setTimeout(nudgeVideos, 1500); }
+});
+addEventListener("focus", nudgeVideos);
+setInterval(() => { if (!document.hidden) nudgeVideos(); }, 5 * 60000);
+setInterval(() => {
+  if (document.hidden) return;
+  document.querySelectorAll("#stage .cam").forEach(box => {
+    if (!box._p || !box._p.stream) return;
+    const vs = box.querySelector("video-stream");
+    const vid = (vs && vs.video) || box.querySelector("video");     // the player's active video element
+    const img = box.querySelector("img");
+    let sig = null, limit = 2;
+    if (vs && vs.pc && /failed|closed/.test(vs.pc.connectionState || "")) { restartCam(box, "webrtc " + vs.pc.connectionState); return; }
+    if (vid) {
+      // decoded frames when the browser reports them, otherwise the playback clock
+      const q = vid.getVideoPlaybackQuality ? vid.getVideoPlaybackQuality().totalVideoFrames : null;
+      sig = vid.readyState >= 2 ? (q || Math.round(vid.currentTime * 10)) : "nodata";
+      limit = sig === "nodata" ? 3 : 2;
+    }
+    else if (img && /stream\.mjpeg/.test(img.src || "")) {
+      box._born = box._born || Date.now();
+      if (Date.now() - box._born > 20 * 60000 + (box._key.length % 5) * 60000) { restartCam(box, "mjpeg renew"); return; }
+      sig = img.naturalWidth ? "ok" : "nodata"; limit = 3;
+      if (sig === "ok") { box._same = 0; box._sig = sig; return; }
+    }
+    else return;                                            // still frames reload themselves
+    if (sig === null) return;
+    box._same = (sig === box._sig) ? (box._same || 0) + 1 : 0;
+    box._sig = sig;
+    if (box._same >= limit) restartCam(box, sig === "nodata" ? "no picture" : "stalled");
+  });
+}, 10000);
 
 /* ---------------- tile ---------------- */
 function tile(p, s, opts = {}) {
@@ -525,7 +625,7 @@ function render(status) {
   renderInner(status); sizeVars();
   // stop camera streams no longer on screen (a detached MJPEG <img> keeps downloading)
   Object.keys(cams).forEach(k => { const c = cams[k]; if (!document.body.contains(c)) {
-    c._dead = true; c.querySelectorAll("img").forEach(i => { i.removeAttribute("src"); }); delete cams[k]; } });
+    killCam(c); delete cams[k]; } });
 }
 function renderInner(status) {
   const stage = document.getElementById("stage");
@@ -703,7 +803,11 @@ async function start() {
   }
   refresh();
   setInterval(refresh, LIVE ? 3000 : 30000);
-  if (LIVE) setTimeout(() => location.reload(), 6 * 3600 * 1000);   // fresh start every few hours on the TV
+  // every 3 h: fresh camera connections (a page reload would drop full screen on the Fire TV)
+  if (LIVE) setInterval(() => {
+    Object.keys(cams).forEach(k => { killCam(cams[k]); delete cams[k]; });
+    lastSig = ""; render(status);
+  }, 3 * 3600 * 1000);
 }
 start();
 </script>
