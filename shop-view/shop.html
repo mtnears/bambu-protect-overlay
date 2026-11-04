@@ -433,9 +433,22 @@ function restartCam(box, why) {
 }
 // Only while the page is visible: a hidden tab pauses its video, which isn't a stall
 // (2026-11-03: an Edge tab in the background was "restarted" every minute).
+// After Edge has had its window covered or minimised, a WebRTC video can stay black (still decoded,
+// not drawn) until something forces a redraw; opening DevTools (a resize) fixed it (2026-11-03).
+// So: when the page comes back into view, and every 5 minutes, play every video and force a redraw.
+function nudgeVideos() {
+  document.querySelectorAll("#stage .cam video").forEach(v => {
+    try { if (v.paused) v.play(); } catch (e) {}
+    v.style.transform = "translateZ(0)";
+    requestAnimationFrame(() => requestAnimationFrame(() => { v.style.transform = ""; }));
+  });
+}
 document.addEventListener("visibilitychange", () => {
   document.querySelectorAll("#stage .cam").forEach(b => { b._same = 0; b._sig = undefined; });
+  if (!document.hidden) { nudgeVideos(); setTimeout(nudgeVideos, 1500); }
 });
+addEventListener("focus", nudgeVideos);
+setInterval(() => { if (!document.hidden) nudgeVideos(); }, 5 * 60000);
 setInterval(() => {
   if (document.hidden) return;
   document.querySelectorAll("#stage .cam").forEach(box => {
